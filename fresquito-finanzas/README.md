@@ -66,17 +66,49 @@ CSV es solo para revisar en Excel — no se puede reimportar.
 
 ## Desplegar para que las dos personas lo usen desde cualquier lado
 
-Ahorita `npm run dev` es solo para tu máquina. Para que la otra persona que
-captura datos también entre desde su celular o compu, hay que:
+El backend (`server/index.js`) ya sirve el frontend compilado
+(`client/dist`) desde el mismo puerto — un solo servicio, una sola URL,
+sin CORS ni configuración de API base separada. Para producción:
 
-1. Subir el backend a algún servidor (Railway, Render, un VPS chico, etc.)
-   con un volumen persistente para `fresquito.db`.
-2. Subir el frontend a donde sea (Vercel, Netlify, o el mismo servidor) y
-   apuntar las llamadas `/api` al backend desplegado (ajustar
-   `client/vite.config.js` o la URL base en `client/src/api.js`).
+```bash
+npm run install:all
+npm run build   # compila client/dist
+npm start        # levanta el backend, que también sirve client/dist
+```
 
-Esto no está hecho todavía — es el siguiente paso natural una vez que
-confirmes que todo funciona bien en local.
+### Desplegar en Render (recomendado)
+
+El repo incluye `render.yaml` listo para usar:
+
+1. En Render → **New** → **Blueprint**, conecta este repo.
+2. Render lee `render.yaml` y crea un Web Service con:
+   - `buildCommand: npm run install:all && npm run build`
+   - `startCommand: npm start`
+   - Un disco persistente de 1GB montado en `/data`, y
+     `FRESQUITO_DB_PATH=/data/fresquito.db` para que la base sobreviva a
+     reinicios y redeploys.
+3. Requiere el plan **Starter** (~$7 USD/mes) — el plan free de Render no
+   soporta discos persistentes, así que la base de datos se borraría en
+   cada reinicio del servicio (duerme tras inactividad en free).
+4. Al terminar el deploy, Render da una URL pública (`https://tu-app.onrender.com`)
+   — ábrela desde cualquier celular o compu.
+
+### Alternativas (Railway / Fly.io)
+
+El mismo `buildCommand`/`startCommand` funciona en Railway o Fly.io con
+ajustes mínimos:
+
+- **Railway**: crea un servicio desde el repo, define `FRESQUITO_DB_PATH`
+  apuntando a un volumen montado (Railway → Settings → Volumes), build
+  command `npm run install:all && npm run build`, start command
+  `npm start`. Cobra por uso, normalmente unos pocos dólares al mes para
+  una app así de chica.
+- **Fly.io**: requiere `flyctl` y un `fly.toml` con un volumen (`fly volumes
+  create`), pero su tier gratuito incluye hasta 3GB de almacenamiento
+  persistente, potencialmente sin costo. Menos plug-and-play que Render.
+
+En cualquier caso, no olvides el respaldo manual (JSON) mientras agarras
+confianza con la plataforma elegida.
 
 ## Modelo de datos y reglas de costeo
 

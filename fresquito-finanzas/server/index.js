@@ -1,5 +1,8 @@
 import express from "express";
 import cors from "cors";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
   leerLibro,
   guardarLibro,
@@ -7,6 +10,7 @@ import {
   leerSnapshot,
 } from "./db.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 
@@ -62,6 +66,16 @@ app.get("/api/snapshots/:id", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+// Sirve el frontend ya compilado (client/dist) para que backend + frontend
+// vivan en un solo servicio desplegado — evita CORS y URLs separadas.
+const clientDist = path.join(__dirname, "../client/dist");
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    res.sendFile(path.join(clientDist, "index.html"));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Servidor de Fresquito escuchando en http://localhost:${PORT}`);
