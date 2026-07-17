@@ -252,7 +252,8 @@ const RECETAS_SEED = [
 
 
 const uid = () => Math.random().toString(36).slice(2, 10);
-const hoy = () => new Date().toISOString().slice(0, 10);
+// Fecha local (no UTC): capturar en la noche no debe caer al día siguiente
+const hoy = () => new Date().toLocaleDateString("en-CA");
 const mxn = (n) => (Number(n) || 0).toLocaleString("es-MX", { style: "currency", currency: "MXN", maximumFractionDigits: 2 });
 const num = (n, d = 2) => (Number(n) || 0).toLocaleString("es-MX", { maximumFractionDigits: d });
 const claveMes = (f) => (f || "").slice(0, 7);
@@ -392,10 +393,24 @@ export default function FresquitoFinanzas() {
 
   useEffect(() => {
     (async () => {
-      const d = await api.leerLibro();
-      if (d) setData(migrar(d));
+      try {
+        const d = await api.leerLibro();
+        if (d) setData(migrar(d));
+      } catch {
+        setAviso("No se pudo abrir el libro. Revisa la conexión con Supabase (client/.env).");
+      }
       setCargando(false);
     })();
+  }, []);
+
+  // Si la otra persona guarda desde su dispositivo, recarga el libro.
+  useEffect(() => {
+    return api.suscribirLibro(async () => {
+      try {
+        const d = await api.leerLibro();
+        if (d) setData(migrar(d));
+      } catch {}
+    });
   }, []);
 
   const guardar = async (nuevo) => {

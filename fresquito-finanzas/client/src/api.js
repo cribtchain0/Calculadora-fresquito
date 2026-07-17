@@ -1,36 +1,58 @@
 /* ────────────────────────────────────────────────────────────
-   Capa de persistencia real (sustituye window.storage de Artifacts).
-   Habla con el backend Express + SQLite en server/.
+   Capa de persistencia real — ahora contra Supabase (Postgres).
+   Mismo contrato de siempre (leerLibro / guardarLibro /
+   listarSnapshots / leerSnapshot) más suscribirLibro (Realtime),
+   así el componente no tiene que saber qué backend hay detrás.
+   Las tablas están normalizadas; las funciones RPC leer_libro /
+   guardar_libro arman y desarman el libro completo en el servidor.
    ──────────────────────────────────────────────────────────── */
 
-const BASE = "/api";
+import { supabase } from "./supabase.js";
+
+// Identifica esta pestaña para no recargar por sus propios guardados
+const CLIENTE_ID = Math.random().toString(36).slice(2, 10);
 
 export async function leerLibro() {
-  const r = await fetch(`${BASE}/libro`);
-  if (!r.ok) throw new Error("No se pudo leer el libro");
-  const { data } = await r.json();
+  const { data, error } = await supabase.rpc("leer_libro");
+  if (error) throw new Error("No se pudo leer el libro");
   return data;
 }
 
 export async function guardarLibro(data) {
-  const r = await fetch(`${BASE}/libro`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+  const { data: meta, error } = await supabase.rpc("guardar_libro", {
+    payload: data,
+    origen_cliente: CLIENTE_ID,
   });
-  if (!r.ok) throw new Error("No se pudo guardar el libro");
-  return r.json();
+  if (error) throw new Error("No se pudo guardar el libro");
+  return meta;
 }
 
 export async function listarSnapshots() {
-  const r = await fetch(`${BASE}/snapshots`);
-  if (!r.ok) throw new Error("No se pudieron listar los respaldos");
-  const { snapshots } = await r.json();
-  return snapshots;
+  const { data, error } = await supabase.rpc("listar_snapshots");
+  if (error) throw new Error("No se pudieron listar los respaldos");
+  return data;
 }
 
 export async function leerSnapshot(id) {
-  const r = await fetch(`${BASE}/snapshots/${id}`);
-  if (!r.ok) throw new Error("No se pudo leer el respaldo");
-  return r.json();
+  const { data, error } = await supabase.rpc("leer_snapshot", { pid: id });
+  if (error || !data) throw new Error("No se pudo leer el respaldo");
+  return data;
+}
+
+/* Avisa cuando otra persona guarda el libro desde otro dispositivo.
+   Devuelve una función para cancelar la suscripción. */
+export function suscribirLibro(onCambioAjeno) {
+  const canal = supabase
+    .channel("libro-cambios")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "libro_meta" },
+      (msg) => {
+        if (msg.new?.origen !== CLIENTE_ID) onCambioAjeno();
+      }
+    )
+    .subscribe();
+  return () => {
+    supabase.removeChannel(canal);
+  };
 }

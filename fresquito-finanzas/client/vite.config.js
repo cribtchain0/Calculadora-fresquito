@@ -4,10 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
-    proxy: {
-      // En desarrollo, las llamadas a /api van al backend en :3001
-      "/api": "http://localhost:3001",
-    },
+    // El puerto puede venir del entorno (p. ej. la vista previa de Claude Code)
+    port: Number(process.env.PORT) || 5173,
   },
 });

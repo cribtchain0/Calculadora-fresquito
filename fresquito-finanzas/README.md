@@ -4,79 +4,73 @@ App para llevar las finanzas de Fresquito Gourmet Pops: gastos e ingresos,
 insumos con merma, bases intermedias, recetas de paletas y su costeo
 (Insumos → Bases → Paletas), gráficas, y ajustes.
 
-Antes vivía como un artifact de Claude.ai con `window.storage`. Aquí corre
-como una app normal: **React (Vite) + un backend Express con SQLite**, para
-que la persistencia sea real e independiente del entorno donde se edite el
-código — dos personas pueden capturar datos desde dispositivos distintos y
-ver el mismo estado.
+El backend es **Supabase (Postgres)**: las dos personas pueden capturar
+datos desde dispositivos distintos y ver el mismo estado, con
+sincronización en tiempo real (si una guarda, la otra ve el cambio sin
+recargar).
 
 ## Estructura
 
 ```
-server/   Backend Express + SQLite (better-sqlite3)
-client/   Frontend Vite + React (el mismo componente de siempre)
+client/               Frontend Vite + React (el mismo componente de siempre)
+supabase/migrations/  Esquema SQL del proyecto Supabase
+server/               (legado) Antiguo backend Express + SQLite; solo queda
+                      el script de migración y la base vieja como respaldo
 ```
+
+## Cómo está guardado todo en Supabase
+
+Tablas normalizadas: `insumos`, `bases`, `recetas`, `movimientos`,
+`ajustes`, más `snapshots` (respaldo automático de cada guardado, máx.
+200) y `libro_meta` (señal para la sincronización en tiempo real).
+
+La app sigue trabajando con el "libro completo": las funciones RPC
+`leer_libro()` y `guardar_libro(payload)` arman y desarman el JSON de
+forma transaccional en el servidor. El cliente solo llama esas RPC
+desde `client/src/api.js`.
+
+**Seguridad:** por ahora el acceso es abierto (cualquiera con la URL y
+la anon key puede leer/escribir). Cuando se quiera login, basta cambiar
+las políticas RLS de `using (true)` a `to authenticated` en el panel de
+Supabase y agregar una pantalla de acceso.
+
+## Configurar la primera vez
+
+1. Aplicar el esquema: pegar el contenido de
+   `supabase/migrations/20260716120000_esquema_fresquito.sql` en el
+   SQL Editor del panel de Supabase y ejecutarlo (es idempotente).
+2. Copiar `client/.env.example` a `client/.env` y llenar
+   `VITE_SUPABASE_ANON_KEY` (panel de Supabase → Settings → API keys).
+3. Instalar dependencias: `npm run install:all`
+4. Si hay datos en la base SQLite vieja (`server/fresquito.db`),
+   migrarlos una sola vez: `npm run migrar:supabase`
 
 ## Arrancar en desarrollo
 
-Primera vez:
-
 ```bash
-npm run install:all
-```
-
-Luego, para levantar backend y frontend juntos:
-
-```bash
-npm install        # solo la primera vez, instala "concurrently"
 npm run dev
 ```
 
-Esto deja:
-- Backend en `http://localhost:3001`
-- Frontend en `http://localhost:5173` (con proxy de `/api` hacia el backend)
+Abre `http://localhost:5173` en el navegador. Ya no hay backend local
+que levantar — el cliente habla directo con Supabase.
 
-Abre `http://localhost:5173` en el navegador.
+## Respaldos
 
-Si prefieres correrlos por separado, en dos terminales:
+- Cada guardado apila una copia completa del libro en la tabla
+  `snapshots` (hasta 200 versiones). No hay UI para restaurar snapshots
+  todavía — se pueden consultar con las RPC `listar_snapshots()` y
+  `leer_snapshot(id)` desde el SQL Editor.
+- Ajustes → Respaldo → **Descargar respaldo (JSON)** guarda el libro
+  completo en un archivo que luego se puede volver a **Restaurar** desde
+  ahí mismo. El CSV es solo para revisar en Excel — no se puede
+  reimportar.
 
-```bash
-npm run dev:server
-npm run dev:client
-```
+## Desplegar
 
-## Dónde vive la base de datos
-
-`server/fresquito.db` (SQLite, se crea sola la primera vez que guardas algo).
-Está en `.gitignore` — no se sube al repo. **Haz respaldo de este archivo de
-vez en cuando** (o usa el botón "Descargar respaldo (JSON)" dentro de la app,
-en Ajustes → Respaldo).
-
-Cada guardado también apila una copia en la tabla `snapshots` (hasta 200
-versiones), como respaldo automático adicional por si algo se pierde o se
-borra sin querer. No hay UI para restaurar snapshots todavía — se puede leer
-directo de la base con `sqlite3 server/fresquito.db` o pedirle a Claude Code
-que arme una pantalla para eso si hace falta.
-
-## Respaldo manual (recomendado mientras agarras confianza)
-
-Ajustes → Respaldo → **Descargar respaldo (JSON)** guarda el libro completo
-en un archivo que luego se puede volver a **Restaurar** desde ahí mismo. El
-CSV es solo para revisar en Excel — no se puede reimportar.
-
-## Desplegar para que las dos personas lo usen desde cualquier lado
-
-Ahorita `npm run dev` es solo para tu máquina. Para que la otra persona que
-captura datos también entre desde su celular o compu, hay que:
-
-1. Subir el backend a algún servidor (Railway, Render, un VPS chico, etc.)
-   con un volumen persistente para `fresquito.db`.
-2. Subir el frontend a donde sea (Vercel, Netlify, o el mismo servidor) y
-   apuntar las llamadas `/api` al backend desplegado (ajustar
-   `client/vite.config.js` o la URL base en `client/src/api.js`).
-
-Esto no está hecho todavía — es el siguiente paso natural una vez que
-confirmes que todo funciona bien en local.
+El cliente es un sitio estático: `npm run build` y subir `client/dist`
+a Vercel, Netlify o similar (configurando las mismas variables
+`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` en el build). No hace
+falta servidor propio.
 
 ## Modelo de datos y reglas de costeo
 
