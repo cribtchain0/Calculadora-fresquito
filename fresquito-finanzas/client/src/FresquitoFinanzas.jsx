@@ -343,6 +343,17 @@ const costoRealPieza = (r) => {
   const costo = p.reduce((a, x) => a + (x.costo || 0), 0);
   return piezas > 0 ? costo / piezas : 0;
 };
+// Ruta SVG de una línea de tendencia diminuta (sin ejes) para valores ya en %.
+const sparklinePath = (valores, w, h) => {
+  if (valores.length < 2) return "";
+  const min = Math.min(...valores), max = Math.max(...valores);
+  const rango = max - min || 1;
+  return valores.map((v, i) => {
+    const x = (i / (valores.length - 1)) * w;
+    const y = h - ((v - min) / rango) * h;
+    return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+};
 
 /* Trae datos de versiones anteriores sin perder nada */
 const migrar = (d) => {
@@ -370,6 +381,43 @@ const migrar = (d) => {
   return out;
 };
 
+/* ── Navegación: 7 vistas, 4 primarias (barra inferior en móvil) ── */
+const NAV_ITEMS = [
+  { k: "panel", l: "Panel", icono: "panel", primaria: true },
+  { k: "movimientos", l: "Movimientos", icono: "movimientos", primaria: true },
+  { k: "paletas", l: "Paletas", icono: "paletas", primaria: true },
+  { k: "insumos", l: "Insumos", icono: "insumos", primaria: true },
+  { k: "bases", l: "Bases", icono: "bases", primaria: false },
+  { k: "graficas", l: "Gráficas", icono: "graficas", primaria: false },
+  { k: "ajustes", l: "Ajustes", icono: "ajustes", primaria: false },
+];
+
+const Icono = ({ n }) => {
+  const p = { width: 18, height: 18, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round" };
+  if (n === "panel") return <svg {...p}><rect x="2.5" y="2.5" width="6.3" height="6.3" rx="1.4" /><rect x="11.2" y="2.5" width="6.3" height="6.3" rx="1.4" /><rect x="2.5" y="11.2" width="6.3" height="6.3" rx="1.4" /><rect x="11.2" y="11.2" width="6.3" height="6.3" rx="1.4" /></svg>;
+  if (n === "movimientos") return <svg {...p}><path d="M3 6.5h10M9 3.5l4 3-4 3" /><path d="M17 13.5H7M11 16.5l-4-3 4-3" /></svg>;
+  if (n === "insumos") return <svg {...p}><rect x="3" y="5" width="14" height="11" rx="1.6" /><path d="M3 9h14M10 5v11" /></svg>;
+  if (n === "bases") return <svg {...p}><rect x="6" y="3" width="8" height="3" rx="1.2" /><rect x="4" y="8.5" width="12" height="3" rx="1.2" /><rect x="2" y="14" width="16" height="3" rx="1.2" /></svg>;
+  if (n === "paletas") return <svg {...p}><rect x="6" y="2.5" width="8" height="10" rx="3" /><rect x="9.25" y="12.5" width="1.5" height="5" rx="0.7" /></svg>;
+  if (n === "graficas") return <svg {...p}><rect x="3" y="11" width="3.4" height="6" rx="1" /><rect x="8.3" y="6.5" width="3.4" height="10.5" rx="1" /><rect x="13.6" y="3" width="3.4" height="14" rx="1" /></svg>;
+  if (n === "ajustes") return <svg {...p}><path d="M3 6h5.5M12.5 6h4.5M3 10h9.5M16.5 10h.5M3 14h5.5M12.5 14h4.5" /><circle cx="10" cy="6" r="1.6" /><circle cx="14.5" cy="10" r="1.6" /><circle cx="10" cy="14" r="1.6" /></svg>;
+  if (n === "mas") return <svg {...p}><circle cx="4" cy="10" r="1.3" /><circle cx="10" cy="10" r="1.3" /><circle cx="16" cy="10" r="1.3" /></svg>;
+  return null;
+};
+
+// Ancho de ventana, para decisiones responsive que CSS solo no puede tomar
+// (ej. orientación de una gráfica de Recharts).
+function useAncho() {
+  const [w, setW] = useState(typeof window !== "undefined" ? window.innerWidth : 1440);
+  useEffect(() => {
+    let t;
+    const onResize = () => { clearTimeout(t); t = setTimeout(() => setW(window.innerWidth), 120); };
+    window.addEventListener("resize", onResize);
+    return () => { clearTimeout(t); window.removeEventListener("resize", onResize); };
+  }, []);
+  return w;
+}
+
 /* ── Estilos ───────────────────────────────────────────────── */
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@600;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;600&display=swap');
@@ -377,6 +425,9 @@ const CSS = `
   --tinta:#0E2A31; --tinta-70:#4A6B72; --tinta-40:#8FA6AB;
   --escarcha:#EDF2F2; --papel:#FFFFFF; --linea:#D8E2E2;
   --teal:#1FA39C; --ambar:#E0A32E; --chile:#D0402E; --cafe:#7A5340;
+  --fs-disp:clamp(1.125rem, 1rem + 1.1vw, 1.5rem);
+  --fs-valor:clamp(1.125rem, 1.05rem + 0.6vw, 1.375rem);
+  --sp-3:10px; --sp-4:14px;
 }
 *{box-sizing:border-box}
 .fq{background:var(--escarcha);color:var(--tinta);min-height:100vh;
@@ -393,18 +444,17 @@ const CSS = `
   margin-bottom:4px;display:block;font-weight:600}
 .fq-hint{font-size:11px;color:var(--tinta-40);margin-top:4px;line-height:1.4}
 .fq-btn{background:var(--tinta);color:#fff;border:0;border-radius:9px;padding:10px 15px;
-  font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+  font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;transition:transform .15s ease}
 .fq-btn:hover{background:#164048}
+.fq-btn:active{transform:scale(.97)}
 .fq-btn:disabled{opacity:.4;cursor:not-allowed}
 .fq-btn.ghost{background:transparent;color:var(--tinta-70);border:1px solid var(--linea)}
 .fq-btn.ghost:hover{background:var(--escarcha);color:var(--tinta)}
 .fq-btn.danger{background:transparent;color:var(--chile);border:1px solid var(--linea)}
-.fq-btn:focus-visible,.fq-in:focus-visible,.fq-tab:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
-.fq-tab{border:0;background:transparent;padding:11px 4px;font-size:13px;font-weight:600;
-  cursor:pointer;font-family:inherit;border-bottom:2px solid transparent;white-space:nowrap}
+.fq-btn:focus-visible,.fq-in:focus-visible,.fq-nav-item:focus-visible,.fq-bottombar-item:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
 .fq-chip{font-size:10px;font-weight:600;padding:2px 8px;border-radius:20px;cursor:pointer;
   border:1px solid var(--linea);color:var(--tinta-70);background:var(--escarcha);font-family:inherit;white-space:nowrap}
-.fq-row{display:flex;justify-content:space-between;align-items:center;gap:10px;
+.fq-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
   padding:11px 13px;border-bottom:1px solid var(--linea)}
 .fq-row:last-child{border-bottom:0}
 .fq-grid{display:grid;gap:10px}
@@ -413,6 +463,105 @@ const CSS = `
 .fq-empty{padding:26px 16px;text-align:center;color:var(--tinta-70);font-size:14px;line-height:1.5}
 .fq-merma{height:6px;border-radius:6px;background:var(--linea);overflow:hidden;display:flex}
 @media (max-width:520px){.fq-grid[data-col3]{grid-template-columns:1fr!important}}
+@media (max-width:767px){
+  .fq-molde{grid-template-columns:repeat(5,1fr)}
+  .fq-row .fq-btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+  .fq-chip{min-height:30px;display:inline-flex;align-items:center}
+}
+
+/* ── Estructura responsive: sidebar / riel / barra inferior ── */
+.fq-shell{display:flex;min-height:100vh}
+.fq-content{flex:1;min-width:0;display:flex;flex-direction:column}
+.fq-topbar{background:var(--tinta);color:#fff;padding:14px 16px}
+.fq-main{max-width:1320px;width:100%;margin:0 auto;padding:clamp(12px,4vw,32px);
+  padding-bottom:calc(clamp(12px,4vw,32px) + 76px)}
+@media (min-width:768px){.fq-main{padding-bottom:clamp(12px,4vw,32px)}}
+.fq-nav{display:none}
+@media (min-width:768px){
+  .fq-nav{display:flex;flex-direction:column;width:64px;flex-shrink:0;background:var(--tinta);
+    padding:16px 0 10px;gap:2px;position:sticky;top:0;align-self:flex-start;height:100vh;overflow-y:auto}
+  .fq-nav-item{display:flex;flex-direction:column;align-items:center;gap:4px;padding:11px 4px;
+    border:0;background:transparent;color:rgba(255,255,255,.55);cursor:pointer;font-family:inherit;
+    border-left:2px solid transparent;font-size:9px;font-weight:600}
+  .fq-nav-item.activo{color:#fff;border-left-color:var(--teal);background:rgba(255,255,255,.05)}
+  .fq-nav-item:hover{color:#fff}
+  .fq-nav-label{display:none}
+}
+@media (min-width:1024px){
+  .fq-nav{width:212px;align-items:stretch;padding:8px 10px 16px}
+  .fq-nav-item{flex-direction:row;justify-content:flex-start;padding:10px 12px;border-radius:9px;
+    border-left:0;font-size:13px;gap:10px}
+  .fq-nav-item.activo{background:rgba(255,255,255,.09);border-left:0}
+  .fq-nav-label{display:inline}
+  .fq-wordmark{padding:10px 12px 20px}
+}
+.fq-bottombar{display:flex;position:fixed;bottom:0;left:0;right:0;background:var(--tinta);
+  border-top:1px solid rgba(255,255,255,.08);z-index:50;padding-bottom:env(safe-area-inset-bottom,0)}
+@media (min-width:768px){.fq-bottombar{display:none}}
+.fq-bottombar-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;padding:7px 4px 9px;background:transparent;border:0;color:rgba(255,255,255,.55);
+  font-family:inherit;font-size:10px;font-weight:600;min-height:52px;cursor:pointer}
+.fq-bottombar-item.activo{color:#fff}
+.fq-bottombar-item.activo svg{color:var(--teal)}
+.fq-sheet-backdrop{position:fixed;inset:0;background:rgba(14,42,49,.4);z-index:70}
+.fq-sheet{position:fixed;left:0;right:0;bottom:0;background:var(--papel);border-radius:16px 16px 0 0;
+  padding:8px 8px calc(14px + env(safe-area-inset-bottom,0));z-index:71;
+  box-shadow:0 -8px 24px rgba(14,42,49,.2)}
+.fq-sheet-handle{width:36px;height:4px;background:var(--linea);border-radius:4px;margin:6px auto 12px}
+.fq-sheet-item{display:flex;align-items:center;gap:12px;padding:13px 14px;border-radius:10px;
+  font-size:14px;font-weight:600;color:var(--tinta);cursor:pointer;background:transparent;border:0;
+  width:100%;text-align:left;font-family:inherit}
+.fq-sheet-item:active{background:var(--escarcha)}
+
+/* ── Grillas responsive de KPI y paneles ── */
+.fq-metrica-grid{display:grid;gap:var(--sp-3);
+  grid-template-columns:repeat(auto-fit, minmax(clamp(148px, 30vw, 200px), 1fr))}
+.fq-metrica-valor{font-size:var(--fs-valor);font-weight:600;margin-top:4px}
+.fq-2col{display:grid;gap:12px}
+@media (min-width:1024px){.fq-2col{grid-template-columns:1fr 1fr;align-items:start}}
+.fq-panel-layout{display:grid;gap:14px;grid-template-areas:"aviso" "principal" "atencion"}
+.fq-panel-aviso{grid-area:aviso}
+.fq-panel-principal{grid-area:principal;display:grid;gap:10px;min-width:0}
+.fq-panel-atencion{grid-area:atencion;display:grid;gap:10px;align-content:start;min-width:0}
+@media (min-width:1024px){
+  .fq-panel-layout{grid-template-columns:2fr 1fr;align-items:start;
+    grid-template-areas:"principal aviso" "principal atencion"}
+}
+
+/* ── Gamificación: un solo acento (teal), siempre contorno/brillo, nunca relleno de dato ── */
+@keyframes fq-logro-glow{
+  0%{box-shadow:0 0 0 0 rgba(31,163,156,0)}
+  18%{box-shadow:0 0 0 3px rgba(31,163,156,.22)}
+  100%{box-shadow:0 0 0 0 rgba(31,163,156,0)}
+}
+.fq-logro{animation:fq-logro-glow 2s ease-out 1}
+@keyframes fq-elevar{0%{transform:translateY(0);box-shadow:none}30%{transform:translateY(-2px);box-shadow:0 6px 16px rgba(14,42,49,.1)}100%{transform:translateY(0);box-shadow:none}}
+.fq-elevar{animation:fq-elevar 1.5s ease-out 1}
+@keyframes fq-brush{0%{background-color:rgba(31,163,156,.14)}100%{background-color:transparent}}
+.fq-brush{animation:fq-brush .5s ease-out 1}
+.fq-progreso{position:relative}
+.fq-progreso::before{content:"";position:absolute;top:0;left:0;height:2px;border-radius:3px 0 0 0;
+  background:rgba(31,163,156,.5);width:var(--progreso,0%);transition:width .6s ease}
+.fq-racha{display:flex;gap:3px;align-items:center;flex-wrap:wrap}
+.fq-racha-punto{width:5px;height:5px;border-radius:50%;background:var(--linea);flex-shrink:0}
+.fq-racha-punto.on{background:var(--teal)}
+.fq-ping{position:relative}
+.fq-ping::after{content:"";position:absolute;top:-1px;right:-1px;width:6px;height:6px;border-radius:50%;background:var(--teal)}
+.fq-confirm{font-size:11px;color:var(--teal);margin-left:8px;font-weight:600;opacity:0;animation:fq-confirm-fade 1.6s ease forwards}
+@keyframes fq-confirm-fade{0%{opacity:0}15%{opacity:1}75%{opacity:1}100%{opacity:0}}
+.fq-nota{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
+  background:var(--tinta);color:#fff;padding:8px 16px;border-radius:20px;font-size:12px;
+  box-shadow:0 6px 18px rgba(14,42,49,.25);z-index:55;opacity:0;animation:fq-nota-in 3.2s ease forwards;
+  max-width:calc(100vw - 24px);text-align:center}
+@keyframes fq-nota-in{0%{opacity:0;transform:translate(-50%,6px)}12%{opacity:1;transform:translate(-50%,0)}82%{opacity:1}100%{opacity:0}}
+.fq-undo{position:fixed;left:50%;transform:translateX(-50%);bottom:14px;
+  background:var(--tinta);color:#fff;border-radius:12px;padding:10px 10px 10px 16px;
+  display:flex;align-items:center;gap:14px;font-size:13px;box-shadow:0 8px 24px rgba(14,42,49,.28);
+  z-index:60;max-width:calc(100vw - 24px)}
+.fq-undo button{background:transparent;border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:8px;
+  padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap}
+@keyframes fq-pulse{0%,100%{opacity:.5}50%{opacity:1}}
+.fq-skel{background:var(--linea);border-radius:10px;animation:fq-pulse 1.6s ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 `;
 
@@ -421,10 +570,10 @@ const Campo = ({ label, hint, children }) => (
   <div><span className="fq-lbl">{label}</span>{children}{hint && <div className="fq-hint">{hint}</div>}</div>
 );
 
-const Metrica = ({ eyebrow, valor, color, sub }) => (
-  <div className="fq-card" style={{ padding: "13px 14px" }}>
+const Metrica = ({ eyebrow, valor, color, sub, logro }) => (
+  <div className={"fq-card" + (logro ? " fq-logro" : "")} style={{ padding: "13px 14px" }}>
     <div className="fq-eyebrow">{eyebrow}</div>
-    <div className="fq-num" style={{ fontSize: 20, fontWeight: 600, color: color || "var(--tinta)", marginTop: 4 }}>{valor}</div>
+    <div className="fq-num fq-metrica-valor" style={{ color: color || "var(--tinta)" }}>{valor}</div>
     {sub && <div style={{ fontSize: 11, color: "var(--tinta-40)", marginTop: 3, lineHeight: 1.35 }}>{sub}</div>}
   </div>
 );
@@ -433,8 +582,15 @@ const Metrica = ({ eyebrow, valor, color, sub }) => (
 export default function FresquitoFinanzas() {
   const [data, setData] = useState(DEFAULTS);
   const [cargando, setCargando] = useState(true);
-  const [vista, setVista] = useState("panel");
+  const [vista, setVista] = useState(() => {
+    try { return localStorage.getItem("fq_vista") || "panel"; } catch { return "panel"; }
+  });
   const [aviso, setAviso] = useState("");
+  const [masAbierto, setMasAbierto] = useState(false);
+  const [nota, setNota] = useState(null);
+  const [papelera, setPapelera] = useState(null);
+  const notaMostrada = React.useRef(false);
+  const pendienteRef = React.useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -445,7 +601,16 @@ export default function FresquitoFinanzas() {
         setAviso("No se pudo abrir el libro. Revisa la conexión con Supabase (client/.env).");
       }
       setCargando(false);
+      // Personalización silenciosa: si el dispositivo ya traía otra pestaña
+      // guardada de una sesión anterior, un aviso breve y nada más.
+      if (vista !== "panel" && !notaMostrada.current) {
+        notaMostrada.current = true;
+        const etiqueta = NAV_ITEMS.find((n) => n.k === vista)?.l || vista;
+        setNota(`Sigues donde ibas: ${etiqueta}`);
+        setTimeout(() => setNota(null), 3200);
+      }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Si la otra persona guarda desde su dispositivo, recarga el libro.
@@ -458,6 +623,10 @@ export default function FresquitoFinanzas() {
     });
   }, []);
 
+  useEffect(() => {
+    try { localStorage.setItem("fq_vista", vista); } catch {}
+  }, [vista]);
+
   const guardar = async (nuevo) => {
     setData(nuevo);
     try {
@@ -469,55 +638,133 @@ export default function FresquitoFinanzas() {
   };
   const set = (parche) => guardar({ ...data, ...parche });
 
+  // Borrar con deshacer: la UI se actualiza al instante, pero el guardado real
+  // a Supabase se retrasa 5s por si el usuario se arrepiente. Confirmación y
+  // deshacer en vez de un modal previo — para eso son las acciones destructivas.
+  const confirmarPendiente = () => {
+    const p = pendienteRef.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendienteRef.current = null;
+    setPapelera(null);
+    api.guardarLibro(p.nuevo).catch(() => {
+      setAviso("No se guardó el cambio. Revisa tu conexión y vuelve a intentarlo.");
+      setTimeout(() => setAviso(""), 4500);
+    });
+  };
+  const pedirBorrar = (nuevo, etiqueta) => {
+    confirmarPendiente();
+    const anterior = data;
+    setData(nuevo);
+    const timer = setTimeout(confirmarPendiente, 5000);
+    pendienteRef.current = { anterior, nuevo, timer };
+    setPapelera({ etiqueta });
+  };
+  const deshacer = () => {
+    const p = pendienteRef.current;
+    if (!p) return;
+    clearTimeout(p.timer);
+    pendienteRef.current = null;
+    setData(p.anterior);
+    setPapelera(null);
+  };
+
   if (cargando)
     return (
-      <div className="fq" style={{ display: "grid", placeItems: "center", padding: 40 }}>
-        <style>{CSS}</style><div className="fq-eyebrow">Abriendo el libro…</div>
+      <div className="fq">
+        <style>{CSS}</style>
+        <div className="fq-topbar"><span className="fq-disp" style={{ fontSize: "var(--fs-disp)" }}>Fresquito</span></div>
+        <main className="fq-main" style={{ maxWidth: 1320 }}>
+          <div className="fq-grid">
+            <div className="fq-metrica-grid">
+              <div className="fq-skel" style={{ height: 74 }} />
+              <div className="fq-skel" style={{ height: 74 }} />
+              <div className="fq-skel" style={{ height: 74 }} />
+            </div>
+            <div className="fq-skel" style={{ height: 210 }} />
+            <div className="fq-skel" style={{ height: 130 }} />
+          </div>
+        </main>
       </div>
     );
 
-  const tabs = [
-    ["panel", "Panel"], ["movimientos", "Movimientos"], ["insumos", "Insumos"],
-    ["bases", "Bases"], ["paletas", "Paletas"], ["graficas", "Gráficas"], ["ajustes", "Ajustes"],
-  ];
+  const irA = (k) => { setVista(k); setMasAbierto(false); };
+  const enMas = ["bases", "graficas", "ajustes"].includes(vista);
 
   return (
     <div className="fq">
       <style>{CSS}</style>
-      <header style={{ background: "var(--tinta)", color: "#fff", padding: "16px 16px 0" }}>
-        <div style={{ maxWidth: 980, margin: "0 auto" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
-            <span className="fq-disp" style={{ fontSize: 21 }}>Fresquito</span>
-            <span className="fq-eyebrow" style={{ color: "rgba(255,255,255,.5)" }}>Libro de finanzas · Cancún</span>
+      <div className="fq-shell">
+        <nav className="fq-nav" aria-label="Secciones">
+          {NAV_ITEMS.map((n) => (
+            <button key={n.k} className={"fq-nav-item" + (vista === n.k ? " activo" : "")} onClick={() => irA(n.k)}>
+              <Icono n={n.icono} />
+              <span className="fq-nav-label">{n.l}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="fq-content">
+          <div className="fq-topbar">
+            <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}>
+              <span className="fq-disp" style={{ fontSize: "var(--fs-disp)" }}>Fresquito</span>
+              <span className="fq-eyebrow" style={{ color: "rgba(255,255,255,.5)" }}>Libro de finanzas · Cancún</span>
+            </div>
           </div>
-          <nav style={{ display: "flex", gap: 16, marginTop: 12, overflowX: "auto" }}>
-            {tabs.map(([k, l]) => (
-              <button key={k} className="fq-tab" onClick={() => setVista(k)}
-                style={{ color: vista === k ? "#fff" : "rgba(255,255,255,.55)", borderBottomColor: vista === k ? "var(--teal)" : "transparent" }}>
-                {l}
-              </button>
-            ))}
-          </nav>
+
+          {aviso && <div style={{ background: "var(--chile)", color: "#fff", padding: "9px 16px", fontSize: 13 }}>{aviso}</div>}
+
+          <main className="fq-main">
+            {vista === "panel" && <Panel data={data} />}
+            {vista === "movimientos" && <Movimientos data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "insumos" && <Insumos data={data} set={set} pedirBorrar={pedirBorrar} />}
+            {vista === "bases" && <Bases data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "paletas" && <Paletas data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "graficas" && <Graficas data={data} />}
+            {vista === "ajustes" && <Ajustes data={data} set={set} guardar={guardar} />}
+          </main>
         </div>
-      </header>
 
-      {aviso && <div style={{ background: "var(--teal)", color: "#fff", padding: "9px 16px", fontSize: 13 }}>{aviso}</div>}
+        <div className="fq-bottombar" aria-label="Secciones">
+          {NAV_ITEMS.filter((n) => n.primaria).map((n) => (
+            <button key={n.k} className={"fq-bottombar-item" + (vista === n.k ? " activo" : "")} onClick={() => irA(n.k)}>
+              <Icono n={n.icono} /><span>{n.l}</span>
+            </button>
+          ))}
+          <button className={"fq-bottombar-item" + (masAbierto || enMas ? " activo" : "")} onClick={() => setMasAbierto(true)}>
+            <Icono n="mas" /><span>Más</span>
+          </button>
+        </div>
+        {masAbierto && (
+          <>
+            <div className="fq-sheet-backdrop" onClick={() => setMasAbierto(false)} />
+            <div className="fq-sheet">
+              <div className="fq-sheet-handle" />
+              {NAV_ITEMS.filter((n) => !n.primaria).map((n) => (
+                <button key={n.k} className="fq-sheet-item" onClick={() => irA(n.k)}>
+                  <Icono n={n.icono} />{n.l}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
 
-      <main style={{ maxWidth: 980, margin: "0 auto", padding: "16px 12px 60px" }}>
-        {vista === "panel" && <Panel data={data} />}
-        {vista === "movimientos" && <Movimientos data={data} guardar={guardar} />}
-        {vista === "insumos" && <Insumos data={data} set={set} />}
-        {vista === "bases" && <Bases data={data} guardar={guardar} />}
-        {vista === "paletas" && <Paletas data={data} guardar={guardar} />}
-        {vista === "graficas" && <Graficas data={data} />}
-        {vista === "ajustes" && <Ajustes data={data} set={set} guardar={guardar} />}
-      </main>
+      {nota && <div className="fq-nota">{nota}</div>}
+      {papelera && (
+        <div className="fq-undo">
+          <span>{papelera.etiqueta}</span>
+          <button onClick={deshacer}>Deshacer</button>
+        </div>
+      )}
     </div>
   );
 }
 
 /* ── Panel ─────────────────────────────────────────────────── */
 function Panel({ data }) {
+  const ancho = useAncho();
+  const movil = ancho < 768;
   const mes = claveMes(hoy());
   const delMes = data.movimientos.filter((m) => claveMes(m.fecha) === mes);
   const ing = delMes.filter((m) => m.tipo === "ingreso").reduce((a, m) => a + m.monto, 0);
@@ -545,10 +792,60 @@ function Panel({ data }) {
 
   const bajos = data.insumos.filter((i) => i.stockMin > 0 && i.stock <= i.stockMin);
 
+  // Momento de logro: la utilidad de este mes supera la del mes pasado (y sí
+  // hubo mes pasado con actividad real, para no "festejar" el primer uso).
+  const mesPrev = serie.length >= 2 ? serie[serie.length - 2] : null;
+  const utilPrev = mesPrev ? mesPrev.Ingresos - mesPrev.Egresos : null;
+  const huboPrev = mesPrev && (mesPrev.Ingresos > 0 || mesPrev.Egresos > 0);
+  const logroUtilidad = !!(huboPrev && util > utilPrev);
+
+  // Brush silencioso cuando la lista de "por reponer" se vacía por completo.
+  const bajosPrevRef = React.useRef(bajos.length);
+  const [resuelto, setResuelto] = useState(false);
+  useEffect(() => {
+    if (bajosPrevRef.current > 0 && bajos.length === 0) {
+      setResuelto(true);
+      setTimeout(() => setResuelto(false), 500);
+    }
+    bajosPrevRef.current = bajos.length;
+  }, [bajos.length]);
+
   return (
-    <div className="fq-grid">
+    <div className="fq-panel-layout">
+      <div className="fq-panel-principal">
+        <div className="fq-metrica-grid">
+          <Metrica eyebrow="Ingresos del mes" valor={mxn(ing)} color="var(--teal)" />
+          <Metrica eyebrow="Egresos del mes" valor={mxn(egr)} color="var(--chile)" />
+          <Metrica eyebrow="Utilidad" valor={mxn(util)} color={util >= 0 ? "var(--tinta)" : "var(--chile)"}
+            sub={ing > 0 ? `Margen ${num((util / ing) * 100, 1)}%` : "Sin ingresos este mes"} logro={logroUtilidad} />
+        </div>
+
+        <div className="fq-metrica-grid">
+          <Metrica eyebrow="Insumos en almacén" valor={mxn(valInsumos)} />
+          <Metrica eyebrow="Bases hechas" valor={mxn(valBases)} sub={`${num(data.bases.reduce((a, b) => a + b.stock, 0), 1)} L listos`} />
+          <Metrica eyebrow="Paletas terminadas" valor={mxn(valPaletas)} sub={`${num(piezasEnStock, 0)} piezas al costo`} />
+        </div>
+
+        <div className="fq-card" style={{ padding: 14 }}>
+          <div className="fq-eyebrow">Últimos 6 meses</div>
+          <div style={{ height: movil ? 160 : 210, marginTop: 10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={serie}>
+                <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
+                <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={46} />
+                <Tooltip formatter={(v) => mxn(v)} />
+                {!movil && <Legend wrapperStyle={{ fontSize: 12 }} />}
+                <Bar dataKey="Ingresos" fill="#1FA39C" radius={[3, 3, 0, 0]} />
+                <Bar dataKey="Egresos" fill="#D0402E" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
       {sinCosto > 0 && (
-        <div className="fq-card" style={{ padding: "12px 14px", borderColor: "var(--ambar)" }}>
+        <div className="fq-panel-aviso fq-card" style={{ padding: "12px 14px", borderColor: "var(--ambar)" }}>
           <div className="fq-eyebrow" style={{ color: "var(--ambar)" }}>Pendiente</div>
           <div style={{ fontSize: 13, marginTop: 4, lineHeight: 1.45 }}>
             Hay {sinCosto} insumos sin precio. Mientras no los captures, el costeo de esos sabores sale incompleto.
@@ -556,55 +853,27 @@ function Panel({ data }) {
         </div>
       )}
 
-      <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
-        <Metrica eyebrow="Ingresos del mes" valor={mxn(ing)} color="var(--teal)" />
-        <Metrica eyebrow="Egresos del mes" valor={mxn(egr)} color="var(--chile)" />
-        <Metrica eyebrow="Utilidad" valor={mxn(util)} color={util >= 0 ? "var(--tinta)" : "var(--chile)"}
-          sub={ing > 0 ? `Margen ${num((util / ing) * 100, 1)}%` : "Sin ingresos este mes"} />
-      </div>
-
-      <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
-        <Metrica eyebrow="Insumos en almacén" valor={mxn(valInsumos)} />
-        <Metrica eyebrow="Bases hechas" valor={mxn(valBases)} sub={`${num(data.bases.reduce((a, b) => a + b.stock, 0), 1)} L listos`} />
-        <Metrica eyebrow="Paletas terminadas" valor={mxn(valPaletas)} sub={`${num(piezasEnStock, 0)} piezas al costo`} />
-      </div>
-
-      <div className="fq-card" style={{ padding: 14 }}>
-        <div className="fq-eyebrow">Últimos 6 meses</div>
-        <div style={{ height: 210, marginTop: 10 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={serie}>
-              <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
-              <XAxis dataKey="mes" tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={46} />
-              <Tooltip formatter={(v) => mxn(v)} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="Ingresos" fill="#1FA39C" radius={[3, 3, 0, 0]} />
-              <Bar dataKey="Egresos" fill="#D0402E" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+      <div className="fq-panel-atencion">
+        <div className={"fq-card" + (resuelto ? " fq-brush" : "")}>
+          <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Insumos por reponer</div>
+          {bajos.length === 0 ? (
+            <div className="fq-empty">Ningún insumo está por debajo de su mínimo.</div>
+          ) : bajos.map((i) => (
+            <div className="fq-row" key={i.id}>
+              <span style={{ fontWeight: 600, fontSize: 14 }}>{i.nombre}</span>
+              <span className="fq-num" style={{ color: "var(--chile)", fontSize: 13 }}>
+                quedan {num(i.stock)} {i.unidad} · mínimo {num(i.stockMin)}
+              </span>
+            </div>
+          ))}
         </div>
-      </div>
-
-      <div className="fq-card">
-        <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Insumos por reponer</div>
-        {bajos.length === 0 ? (
-          <div className="fq-empty">Ningún insumo está por debajo de su mínimo.</div>
-        ) : bajos.map((i) => (
-          <div className="fq-row" key={i.id}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{i.nombre}</span>
-            <span className="fq-num" style={{ color: "var(--chile)", fontSize: 13 }}>
-              quedan {num(i.stock)} {i.unidad} · mínimo {num(i.stockMin)}
-            </span>
-          </div>
-        ))}
       </div>
     </div>
   );
 }
 
 /* ── Movimientos ───────────────────────────────────────────── */
-function Movimientos({ data, guardar }) {
+function Movimientos({ data, guardar, pedirBorrar }) {
   const base = {
     tipo: "gasto", fecha: hoy(), monto: "", categoria: "Insumos", lugar: "",
     canal: "Evento / carrito", notas: "", insumoId: "", cantidad: "", mayoreo: false, porPaquete: false,
@@ -612,8 +881,25 @@ function Movimientos({ data, guardar }) {
   };
   const [f, setF] = useState(base);
   const [filtro, setFiltro] = useState("todos");
+  const [filtroClicks, setFiltroClicks] = useState(0);
+  const [comparar, setComparar] = useState(false);
+  const [unlockVisto, setUnlockVisto] = useState(false);
+  const [guardadoTick, setGuardadoTick] = useState(0);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const receta = data.recetas.find((r) => r.id === f.recetaId);
+  const aplicarFiltro = (k) => { setFiltro(k); setFiltroClicks((n) => n + 1); };
+
+  // Desbloqueo progresivo: al tercer filtro usado en la sesión aparece,
+  // sin interrumpir, una comparación rápida contra el mes pasado.
+  const comparativa = useMemo(() => {
+    const mesActual = claveMes(hoy());
+    const dPrev = new Date(); dPrev.setDate(1); dPrev.setMonth(dPrev.getMonth() - 1);
+    const mesPrevio = dPrev.toISOString().slice(0, 7);
+    const suma = (mes) => data.movimientos
+      .filter((m) => claveMes(m.fecha) === mes && (filtro === "todos" || m.tipo === filtro))
+      .reduce((a, m) => a + (filtro === "todos" ? (m.tipo === "ingreso" ? m.monto : -m.monto) : m.monto), 0);
+    return { actual: suma(mesActual), previo: suma(mesPrevio) };
+  }, [data.movimientos, filtro]);
 
   const proponerMonto = (recetaId, piezas, mayoreo) => {
     const r = data.recetas.find((x) => x.id === recetaId);
@@ -650,10 +936,11 @@ function Movimientos({ data, guardar }) {
     }
     guardar({ ...data, insumos, recetas, movimientos: [mov, ...data.movimientos] });
     setF({ ...base, tipo: f.tipo, capturadoPor: f.capturadoPor });
+    setGuardadoTick((n) => n + 1);
   };
 
   const repetir = (m) => setF({ ...base, ...m, fecha: hoy(), monto: String(m.monto), cantidad: m.cantidad ? String(m.cantidad) : "", piezas: m.piezas ? String(m.piezas) : "" });
-  const borrar = (id) => guardar({ ...data, movimientos: data.movimientos.filter((m) => m.id !== id) });
+  const borrar = (id) => pedirBorrar({ ...data, movimientos: data.movimientos.filter((m) => m.id !== id) }, "Movimiento eliminado");
 
   const lista = data.movimientos.filter((m) => filtro === "todos" || m.tipo === filtro);
   const esGasto = f.tipo === "gasto";
@@ -771,18 +1058,38 @@ function Movimientos({ data, guardar }) {
           </label>
         )}
 
-        <button className="fq-btn" style={{ marginTop: 13, width: "100%" }} onClick={agregar}>
-          Guardar {esGasto ? "gasto" : "ingreso"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13 }}>
+          <button className="fq-btn" style={{ flex: 1 }} onClick={agregar}>
+            Guardar {esGasto ? "gasto" : "ingreso"}
+          </button>
+          {guardadoTick > 0 && <span key={guardadoTick} className="fq-confirm">Guardado</span>}
+        </div>
       </div>
 
       <div className="fq-card">
-        <div style={{ display: "flex", gap: 6, padding: "12px 13px" }}>
+        <div style={{ display: "flex", gap: 6, padding: "12px 13px", flexWrap: "wrap", alignItems: "center" }}>
           {[["todos", "Todos"], ["gasto", "Gastos"], ["ingreso", "Ingresos"]].map(([k, l]) => (
-            <button key={k} className="fq-chip" onClick={() => setFiltro(k)}
+            <button key={k} className="fq-chip" onClick={() => aplicarFiltro(k)}
               style={filtro === k ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}>{l}</button>
           ))}
+          {filtroClicks >= 3 && (
+            <button className={"fq-chip" + (!unlockVisto ? " fq-ping" : "")}
+              onClick={() => { setComparar((v) => !v); setUnlockVisto(true); }}
+              style={comparar ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}>
+              Comparar periodos
+            </button>
+          )}
         </div>
+        {comparar && filtroClicks >= 3 && (
+          <div className="fq-num" style={{ padding: "0 13px 12px", fontSize: 12, color: "var(--tinta-70)" }}>
+            Este mes {mxn(comparativa.actual)} · mes pasado {mxn(comparativa.previo)}
+            {comparativa.previo !== 0 && (
+              <span style={{ color: comparativa.actual >= comparativa.previo ? "var(--teal)" : "var(--chile)" }}>
+                {" "}({comparativa.actual >= comparativa.previo ? "+" : ""}{num(((comparativa.actual - comparativa.previo) / Math.abs(comparativa.previo)) * 100, 0)}%)
+              </span>
+            )}
+          </div>
+        )}
         {lista.length === 0 ? (
           <div className="fq-empty">Todavía no hay movimientos. Captura tu primer gasto o ingreso arriba.</div>
         ) : lista.slice(0, 100).map((m) => (
@@ -813,7 +1120,7 @@ function Movimientos({ data, guardar }) {
 }
 
 /* ── Insumos ───────────────────────────────────────────────── */
-function Insumos({ data, set }) {
+function Insumos({ data, set, pedirBorrar }) {
   const vacio = { nombre: "", tipo: "Fruta", unidad: "kg", merma: "", stock: "", costoProm: "", lugar: "", stockMin: "", notas: "",
     porPaquete: false, unidadesPorPaquete: "", nombrePaquete: "" };
   const [f, setF] = useState(vacio);
@@ -821,6 +1128,7 @@ function Insumos({ data, set }) {
   const [sel, setSel] = useState(null);
   const [busca, setBusca] = useState("");
   const [soloSinPrecio, setSoloSinPrecio] = useState(false);
+  const [guardadoTick, setGuardadoTick] = useState(0);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const agregar = () => {
@@ -834,13 +1142,14 @@ function Insumos({ data, set }) {
       }],
     });
     setF(vacio); setAbierto(false);
+    setGuardadoTick((n) => n + 1);
   };
 
   const ajustar = (id, d) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, stock: Math.max(0, i.stock + d) } : i)) });
   const TEXTO = ["nombre", "lugar", "notas", "tipo", "nombrePaquete"];
   const editar = (id, k, v) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, [k]: TEXTO.includes(k) ? v : Number(v) || 0 } : i)) });
   const editarPatch = (id, patch) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, ...patch } : i)) });
-  const borrar = (id) => set({ insumos: data.insumos.filter((i) => i.id !== id) });
+  const borrar = (id) => pedirBorrar({ ...data, insumos: data.insumos.filter((i) => i.id !== id) }, "Insumo eliminado");
 
   // Cambiar de kg a g (o de L a ml) convierte existencia, precio, historial
   // y TODAS las cantidades en recetas y bases. Así nada se descuadra.
@@ -876,7 +1185,7 @@ function Insumos({ data, set }) {
 
   return (
     <div className="fq-grid">
-      <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+      <div className="fq-metrica-grid">
         <Metrica eyebrow="Valor del almacén" valor={mxn(valorTotal)} />
         <Metrica eyebrow="Insumos" valor={data.insumos.length} />
         <Metrica eyebrow="Sin precio" valor={sinPrecio} color={sinPrecio ? "var(--ambar)" : "var(--teal)"} />
@@ -925,7 +1234,10 @@ function Insumos({ data, set }) {
               Compras a {mxn(f.costoProm)}/{f.unidad}, pero el {f.unidad} limpio te sale en {mxn(Number(f.costoProm) / (1 - Number(f.merma) / 100))}
             </div>
           )}
-          <button className="fq-btn" style={{ marginTop: 12, width: "100%" }} onClick={agregar}>Guardar insumo</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12 }}>
+            <button className="fq-btn" style={{ flex: 1 }} onClick={agregar}>Guardar insumo</button>
+            {guardadoTick > 0 && <span key={guardadoTick} className="fq-confirm">Guardado</span>}
+          </div>
         </div>
       )}
 
@@ -1060,7 +1372,7 @@ function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad }) {
         </div>
       )}
 
-      <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)", marginTop: 12 }}>
+      <div className="fq-metrica-grid" style={{ marginTop: 12 }}>
         <Metrica eyebrow="Última compra" valor={mxn(i.ultimoCosto || i.costoProm)} />
         <Metrica eyebrow="Promedio" valor={mxn(i.costoProm)} />
         <Metrica eyebrow="Ya limpio" valor={mxn(costoUtil(i))} color="var(--teal)" />
@@ -1149,7 +1461,7 @@ function FormBase({ inicial, insumos, onGuardar, onCancelar }) {
   );
 }
 
-function Bases({ data, guardar }) {
+function Bases({ data, guardar, pedirBorrar }) {
   const vacio = { nombre: "", unidad: "L", rinde: "", items: [], notas: "", stock: 0, costoProm: 0 };
   const [editando, setEditando] = useState(null); // "nuevo" | id
   const [lotes, setLotes] = useState({});
@@ -1159,7 +1471,7 @@ function Bases({ data, guardar }) {
     else guardar({ ...data, bases: data.bases.map((b) => (b.id === editando ? { ...b, ...f } : b)) });
     setEditando(null);
   };
-  const borrar = (id) => { setEditando(null); guardar({ ...data, bases: data.bases.filter((b) => b.id !== id) }); };
+  const borrar = (id) => { setEditando(null); pedirBorrar({ ...data, bases: data.bases.filter((b) => b.id !== id) }, "Base eliminada"); };
 
   const producir = (b, n) => {
     const cantidad = Number(n) || 1;
@@ -1329,7 +1641,7 @@ function FormReceta({ inicial, opciones, data, onGuardar, onCancelar }) {
   );
 }
 
-function Paletas({ data, guardar }) {
+function Paletas({ data, guardar, pedirBorrar }) {
   const { moldePiezas, ciclosLitros } = data.ajustes;
   const vacio = { sabor: "", linea: "Agua/Frutal", litros: String(ciclosLitros), piezas: String(moldePiezas), precioMenudeo: "", precioMayoreo: "", items: [], notas: "", stock: 0 };
   const [editando, setEditando] = useState(null);
@@ -1347,7 +1659,7 @@ function Paletas({ data, guardar }) {
     else guardar({ ...data, recetas: data.recetas.map((r) => (r.id === editando ? { ...r, ...f } : r)) });
     setEditando(null);
   };
-  const borrar = (id) => { setSel(null); setEditando(null); guardar({ ...data, recetas: data.recetas.filter((r) => r.id !== id) }); };
+  const borrar = (id) => { setSel(null); setEditando(null); pedirBorrar({ ...data, recetas: data.recetas.filter((r) => r.id !== id) }, "Sabor eliminado"); };
 
   // Producción con cantidades REALES capturadas. `lineas` trae, por ingrediente,
   // la cantidad física ya usada (en la unidad base del insumo/base) y su costo real.
@@ -1374,7 +1686,7 @@ function Paletas({ data, guardar }) {
 
   return (
     <div className="fq-grid">
-      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+      <div className="fq-metrica-grid">
         <Metrica eyebrow="Paletas en inventario" valor={num(piezasTotal, 0)} sub="Terminadas y listas para vender" />
         <Metrica eyebrow="Sabores registrados" valor={data.recetas.length} />
       </div>
@@ -1463,6 +1775,19 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
   const utilMay = r.precioMayoreo - porPieza;
   const equilibrio = utilMen > 0 ? Math.ceil(fijos / utilMen) : 0;
 
+  // Progreso ambiental hacia el punto de equilibrio de este sabor este mes.
+  const mesActual = claveMes(hoy());
+  const piezasVendidasMes = data.movimientos
+    .filter((m) => m.tipo === "ingreso" && m.recetaId === r.id && claveMes(m.fecha) === mesActual)
+    .reduce((a, m) => a + (m.piezas || 0), 0);
+  const progresoEquilibrio = equilibrio > 0 ? Math.min(100, (piezasVendidasMes / equilibrio) * 100) : 0;
+
+  // Racha: últimas producciones dentro del estándar. Desbloqueo: con 5+
+  // producciones aparece además la tendencia como una línea diminuta.
+  const racha = prods.slice(0, 12).reverse().map((p) => porPieza > 0 && p.costoPieza <= porPieza);
+  const sparkVals = prods.slice(0, 8).reverse().map((p) => (porPieza > 0 ? ((p.costoPieza - porPieza) / porPieza) * 100 : 0));
+  const sparkPath = prods.length >= 5 ? sparklinePath(sparkVals, 88, 22) : "";
+
   const total = Math.max(1, Math.min(120, Math.round(piezas)));
   const celdas = [];
   partes.forEach((p) => {
@@ -1473,91 +1798,112 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
   celdas.length = total;
 
   return (
-    <div className="fq-card" style={{ padding: 14 }}>
+    <div className="fq-card fq-progreso" style={{ padding: 14, "--progreso": `${progresoEquilibrio}%` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div className="fq-eyebrow">Una corrida de {r.sabor} · {num(r.litros, 1)} L · {num(piezas, 0)} piezas</div>
         <button className="fq-btn ghost" style={{ padding: "4px 10px", fontSize: 12, whiteSpace: "nowrap" }} onClick={onEditar}>Editar receta</button>
       </div>
       {r.notas && <div style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 6, lineHeight: 1.45 }}>{r.notas}</div>}
 
-      <div className="fq-molde" style={{ margin: "12px 0 8px" }}>
-        {celdas.map((color, i) => <div key={i} className="fq-celda" style={{ background: color }} />)}
-      </div>
-      <div style={{ fontSize: 11, color: "var(--tinta-40)", marginBottom: 12 }}>
-        Cada paleta del molde, pintada según a qué se le va el dinero.
-      </div>
+      <div className="fq-2col" style={{ marginTop: 12 }}>
+        <div>
+          <div className="fq-molde">
+            {celdas.map((color, i) => <div key={i} className="fq-celda" style={{ background: color }} />)}
+          </div>
+          <div style={{ fontSize: 11, color: "var(--tinta-40)", margin: "6px 0 12px" }}>
+            Cada paleta del molde, pintada según a qué se le va el dinero.
+          </div>
 
-      {rotos > 0 && (
-        <div style={{ fontSize: 12, color: "var(--chile)", marginBottom: 10, lineHeight: 1.4 }}>
-          ⚠️ {rotos} ingrediente{rotos > 1 ? "s" : ""} de esta receta ya no existe{rotos > 1 ? "n" : ""} en tu catálogo de insumos/bases.
-          Corrígelo en "Editar receta" — el costo de abajo NO los está contando.
-        </div>
-      )}
-      {faltantes > 0 && (
-        <div style={{ fontSize: 12, color: "var(--ambar)", marginBottom: 10, lineHeight: 1.4 }}>
-          {faltantes} de estos insumos no tienen precio todavía. El costo de abajo está incompleto.
-        </div>
-      )}
+          {rotos > 0 && (
+            <div style={{ fontSize: 12, color: "var(--chile)", marginBottom: 10, lineHeight: 1.4 }}>
+              ⚠️ {rotos} ingrediente{rotos > 1 ? "s" : ""} de esta receta ya no existe{rotos > 1 ? "n" : ""} en tu catálogo de insumos/bases.
+              Corrígelo en "Editar receta" — el costo de abajo NO los está contando.
+            </div>
+          )}
+          {faltantes > 0 && (
+            <div style={{ fontSize: 12, color: "var(--ambar)", marginBottom: 10, lineHeight: 1.4 }}>
+              {faltantes} de estos insumos no tienen precio todavía. El costo de abajo está incompleto.
+            </div>
+          )}
 
-      {partes.map((p, k) => (
-        <div key={k} className="fq-row" style={{ padding: "7px 0" }}>
-          <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
-            <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color }} />
-            {p.roto ? "⚠️ " : p.esBase ? "⬢ " : ""}{p.nombre}
-            <span className="fq-num" style={{ color: "var(--tinta-40)", fontSize: 11 }}>
-              {num(p.cantidad)} {p.unidad}{p.merma > 0 ? " limpio" : ""}
-            </span>
-          </span>
-          <span className="fq-num" style={{ fontSize: 13, whiteSpace: "nowrap", color: p.roto ? "var(--chile)" : p.sinCosto ? "var(--ambar)" : "var(--tinta)" }}>
-            {p.roto ? "no encontrado" : p.sinCosto ? "sin precio" : `${mxn(p.costo)} · ${num(costo > 0 ? (p.costo / costo) * 100 : 0, 0)}%`}
-          </span>
-        </div>
-      ))}
-
-      <div className="fq-grid" style={{ gridTemplateColumns: "repeat(2,1fr)", marginTop: 14 }}>
-        <Metrica eyebrow="Costo por corrida" valor={mxn(costo)} />
-        <Metrica eyebrow="Costo por pieza" valor={mxn(porPieza)} />
-        <Metrica eyebrow="Ganas al menudeo" valor={r.precioMenudeo > 0 ? mxn(utilMen) : "—"}
-          color={utilMen > 0 ? "var(--teal)" : "var(--chile)"} sub={r.precioMenudeo > 0 ? `Vendes a ${mxn(r.precioMenudeo)}` : "Captura el precio"} />
-        <Metrica eyebrow="Ganas al mayoreo" valor={r.precioMayoreo > 0 ? mxn(utilMay) : "—"}
-          color={utilMay > 0 ? "var(--teal)" : "var(--chile)"} sub={r.precioMayoreo > 0 ? `Vendes a ${mxn(r.precioMayoreo)}` : "Captura el precio"} />
-      </div>
-
-      {prods.length > 0 && (
-        <div className="fq-grid" style={{ gridTemplateColumns: "repeat(2,1fr)", marginTop: 10 }}>
-          <Metrica eyebrow="Costo real / pieza (prom.)" valor={mxn(realPieza)}
-            color={realPieza <= porPieza ? "var(--teal)" : "var(--chile)"}
-            sub={`${prods.length} producciones · estándar ${mxn(porPieza)}`} />
-          <Metrica eyebrow="Variación vs estándar" valor={`${variacion > 0 ? "+" : ""}${num(variacion, 0)}%`}
-            color={variacion <= 0 ? "var(--teal)" : "var(--chile)"}
-            sub={variacion > 0 ? "Cuesta más de lo planeado" : "Dentro del estándar"} />
-        </div>
-      )}
-
-      <div style={{ marginTop: 10 }}>
-        <Metrica eyebrow="Punto de equilibrio" valor={equilibrio > 0 ? `${num(equilibrio, 0)} pzas al mes` : "—"}
-          sub={fijos > 0 ? "Piezas al menudeo para cubrir tus costos fijos" : "Captura tus costos fijos en Ajustes"} />
-      </div>
-
-      <ProducirReceta r={r} data={data} producir={producir} />
-
-      {prods.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <div className="fq-eyebrow" style={{ marginBottom: 6 }}>Últimas producciones</div>
-          {prods.slice(0, 6).map((p) => (
-            <div className="fq-row" key={p.id} style={{ padding: "6px 0" }}>
-              <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
-                {p.fecha} · {num(p.corridas, 0)} corr · {num(p.piezas, 0)} pzas
+          {partes.map((p, k) => (
+            <div key={k} className="fq-row" style={{ padding: "7px 0" }}>
+              <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color }} />
+                {p.roto ? "⚠️ " : p.esBase ? "⬢ " : ""}{p.nombre}
+                <span className="fq-num" style={{ color: "var(--tinta-40)", fontSize: 11 }}>
+                  {num(p.cantidad)} {p.unidad}{p.merma > 0 ? " limpio" : ""}
+                </span>
               </span>
-              <span className="fq-num" style={{ fontSize: 12 }}>{mxn(p.costo)} · {mxn(p.costoPieza)}/pza</span>
+              <span className="fq-num" style={{ fontSize: 13, whiteSpace: "nowrap", color: p.roto ? "var(--chile)" : p.sinCosto ? "var(--ambar)" : "var(--tinta)" }}>
+                {p.roto ? "no encontrado" : p.sinCosto ? "sin precio" : `${mxn(p.costo)} · ${num(costo > 0 ? (p.costo / costo) * 100 : 0, 0)}%`}
+              </span>
             </div>
           ))}
         </div>
-      )}
 
-      <div style={{ display: "flex", gap: 6, marginTop: 13 }}>
-        <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onEditar}>Editar receta</button>
-        <button className="fq-btn danger" onClick={() => borrar(r.id)}>Borrar</button>
+        <div>
+          <div className="fq-metrica-grid">
+            <Metrica eyebrow="Costo por corrida" valor={mxn(costo)} />
+            <Metrica eyebrow="Costo por pieza" valor={mxn(porPieza)} />
+            <Metrica eyebrow="Ganas al menudeo" valor={r.precioMenudeo > 0 ? mxn(utilMen) : "—"}
+              color={utilMen > 0 ? "var(--teal)" : "var(--chile)"} sub={r.precioMenudeo > 0 ? `Vendes a ${mxn(r.precioMenudeo)}` : "Captura el precio"} />
+            <Metrica eyebrow="Ganas al mayoreo" valor={r.precioMayoreo > 0 ? mxn(utilMay) : "—"}
+              color={utilMay > 0 ? "var(--teal)" : "var(--chile)"} sub={r.precioMayoreo > 0 ? `Vendes a ${mxn(r.precioMayoreo)}` : "Captura el precio"} />
+          </div>
+
+          {prods.length > 0 && (
+            <div className="fq-metrica-grid" style={{ marginTop: 10 }}>
+              <Metrica eyebrow="Costo real / pieza (prom.)" valor={mxn(realPieza)}
+                color={realPieza <= porPieza ? "var(--teal)" : "var(--chile)"}
+                sub={`${prods.length} producciones · estándar ${mxn(porPieza)}`} />
+              <Metrica eyebrow="Variación vs estándar" valor={`${variacion > 0 ? "+" : ""}${num(variacion, 0)}%`}
+                color={variacion <= 0 ? "var(--teal)" : "var(--chile)"}
+                sub={variacion > 0 ? "Cuesta más de lo planeado" : "Dentro del estándar"} />
+            </div>
+          )}
+
+          {racha.length >= 3 && (
+            <div style={{ marginTop: 10 }}>
+              <div className="fq-eyebrow" style={{ marginBottom: 5 }}>Racha dentro del estándar</div>
+              <div className="fq-racha">
+                {racha.map((on, i) => <span key={i} className={"fq-racha-punto" + (on ? " on" : "")} />)}
+                {sparkPath && (
+                  <svg width="88" height="22" viewBox="0 0 88 22" style={{ marginLeft: 6, flexShrink: 0 }}>
+                    <path d={sparkPath} fill="none" stroke="var(--teal)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                )}
+              </div>
+              <div className="fq-hint">{sparkPath ? "Puntos = últimas producciones · línea = tendencia de variación" : "Puntos = últimas producciones dentro o fuera del estándar"}</div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 10 }}>
+            <Metrica eyebrow="Punto de equilibrio" valor={equilibrio > 0 ? `${num(equilibrio, 0)} pzas al mes` : "—"}
+              sub={fijos > 0 ? (equilibrio > 0 ? `Llevas ${num(piezasVendidasMes, 0)} vendidas este mes` : "Piezas al menudeo para cubrir tus costos fijos") : "Captura tus costos fijos en Ajustes"} />
+          </div>
+
+          <ProducirReceta r={r} data={data} producir={producir} porPieza={porPieza} />
+
+          {prods.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div className="fq-eyebrow" style={{ marginBottom: 6 }}>Últimas producciones</div>
+              {prods.slice(0, 6).map((p) => (
+                <div className="fq-row" key={p.id} style={{ padding: "6px 0" }}>
+                  <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
+                    {p.fecha} · {num(p.corridas, 0)} corr · {num(p.piezas, 0)} pzas
+                  </span>
+                  <span className="fq-num" style={{ fontSize: 12 }}>{mxn(p.costo)} · {mxn(p.costoPieza)}/pza</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 6, marginTop: 13 }}>
+            <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onEditar}>Editar receta</button>
+            <button className="fq-btn danger" onClick={() => borrar(r.id)}>Borrar</button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1565,10 +1911,11 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
 
 /* Panel de producción: captura lo REAL usado por ingrediente (kg/g, pzs o
    paquete) para descontar bien del inventario y sacar el costo real. */
-function ProducirReceta({ r, data, producir }) {
+function ProducirReceta({ r, data, producir, porPieza }) {
   const [corridas, setCorridas] = useState("1");
   const corridasNum = Number(corridas) || 1;
   const [reales, setReales] = useState({});
+  const [logroActivo, setLogroActivo] = useState(false);
 
   const refDe = (it) => (it.tipo === "base"
     ? data.bases.find((b) => b.id === it.refId)
@@ -1623,12 +1970,18 @@ function ProducirReceta({ r, data, producir }) {
   const confirmar = () => {
     const payload = lineas.filter((l) => l.ref).map((l) => ({ tipo: l.it.tipo, refId: l.it.refId, cant: l.fisico, costo: l.costo }));
     producir(r, corridasNum, payload);
+    // Momento de logro: la corrida salió igual o mejor que el estándar.
+    if (porPieza > 0 && piezas > 0 && costoTotal / piezas <= porPieza) {
+      setLogroActivo(true);
+      setTimeout(() => setLogroActivo(false), 1500);
+    }
   };
 
   const nombreUnidad = (ref, u) => (u === PAQ ? (ref.nombrePaquete || "paq") : u);
 
   return (
-    <div style={{ marginTop: 14, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+    <div className={logroActivo ? "fq-elevar" : undefined}
+      style={{ marginTop: 14, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
       <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Registrar producción · cantidades reales usadas</div>
       <Campo label="Corridas / ciclos" hint="Cuántas veces hiciste esta receta. Pre-llena lo sugerido abajo.">
         <input type="number" inputMode="numeric" className="fq-in" value={corridas} onChange={(e) => setCorridas(e.target.value)} />
@@ -1676,6 +2029,8 @@ function ProducirReceta({ r, data, producir }) {
 /* ── Gráficas ──────────────────────────────────────────────── */
 function Graficas({ data }) {
   const [insHist, setInsHist] = useState("");
+  const ancho = useAncho();
+  const movil = ancho < 768;
 
   // ── Costeo de paletas ──
   // "De agua" = sin base de leche/crema; "de leche" = usa alguna base (⬢).
@@ -1749,44 +2104,64 @@ function Graficas({ data }) {
     <div className="fq-grid">
       {conCosto.length > 0 ? (
         <>
-          <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+          <div className="fq-metrica-grid">
             <Metrica eyebrow="Costo prom. paletas de agua" valor={mxn(promAgua)} color="var(--teal)" sub={`${agua.length} sabores sin base`} />
             <Metrica eyebrow="Costo prom. paletas de leche" valor={mxn(promCrema)} color="var(--ambar)" sub={`${crema.length} sabores con base`} />
             <Metrica eyebrow="Costo prom. todas" valor={mxn(promTodas)} sub={`${conCosto.length} sabores costeados`} />
           </div>
 
-          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <div className="fq-metrica-grid">
             <Metrica eyebrow="La que más cuesta" valor={masCara ? masCara.sabor : "—"} color="var(--chile)"
               sub={masCara ? `${mxn(masCara.costo)} por pieza` : ""} />
             <Metrica eyebrow="La que menos cuesta" valor={masBarata ? masBarata.sabor : "—"} color="var(--teal)"
               sub={masBarata ? `${mxn(masBarata.costo)} por pieza` : ""} />
           </div>
 
-          <Panelito titulo="Costo por pieza de cada sabor (teal = agua · ámbar = leche)">
-            <BarChart data={topCosto}>
-              <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
-              <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
-              <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={48} />
-              <Tooltip formatter={(v) => mxn(v)} />
-              <Bar dataKey="costo" radius={[3, 3, 0, 0]}>
-                {topCosto.map((d, i) => <Cell key={i} fill={d.crema ? "#E0A32E" : "#1FA39C"} />)}
-              </Bar>
-            </BarChart>
-          </Panelito>
-
-          {margenData.length > 0 && (
-            <Panelito titulo="Margen al menudeo por sabor (%)">
-              <BarChart data={margenData}>
-                <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
-                <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
-                <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={44} unit="%" />
-                <Tooltip formatter={(v) => `${num(v, 0)}%`} />
-                <Bar dataKey="margen" radius={[3, 3, 0, 0]}>
-                  {margenData.map((d, i) => <Cell key={i} fill={d.margen >= 50 ? "#1FA39C" : d.margen >= 0 ? "#E0A32E" : "#D0402E"} />)}
+          <div className="fq-2col">
+            <Panelito titulo="Costo por pieza de cada sabor (teal = agua · ámbar = leche)">
+              <BarChart data={topCosto} layout={movil ? "vertical" : "horizontal"}>
+                <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={movil} horizontal={!movil} />
+                {movil ? (
+                  <>
+                    <XAxis type="number" tick={{ fontSize: 10, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="sabor" width={96} tick={{ fontSize: 10, fill: "#4A6B72" }} axisLine={false} tickLine={false} />
+                  </>
+                ) : (
+                  <>
+                    <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
+                    <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={48} />
+                  </>
+                )}
+                <Tooltip formatter={(v) => mxn(v)} />
+                <Bar dataKey="costo" radius={movil ? [0, 3, 3, 0] : [3, 3, 0, 0]}>
+                  {topCosto.map((d, i) => <Cell key={i} fill={d.crema ? "#E0A32E" : "#1FA39C"} />)}
                 </Bar>
               </BarChart>
             </Panelito>
-          )}
+
+            {margenData.length > 0 && (
+              <Panelito titulo="Margen al menudeo por sabor (%)">
+                <BarChart data={margenData} layout={movil ? "vertical" : "horizontal"}>
+                  <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={movil} horizontal={!movil} />
+                  {movil ? (
+                    <>
+                      <XAxis type="number" tick={{ fontSize: 10, fill: "#8FA6AB" }} axisLine={false} tickLine={false} unit="%" />
+                      <YAxis type="category" dataKey="sabor" width={96} tick={{ fontSize: 10, fill: "#4A6B72" }} axisLine={false} tickLine={false} />
+                    </>
+                  ) : (
+                    <>
+                      <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
+                      <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={44} unit="%" />
+                    </>
+                  )}
+                  <Tooltip formatter={(v) => `${num(v, 0)}%`} />
+                  <Bar dataKey="margen" radius={movil ? [0, 3, 3, 0] : [3, 3, 0, 0]}>
+                    {margenData.map((d, i) => <Cell key={i} fill={d.margen >= 50 ? "#1FA39C" : d.margen >= 0 ? "#E0A32E" : "#D0402E"} />)}
+                  </Bar>
+                </BarChart>
+              </Panelito>
+            )}
+          </div>
         </>
       ) : (
         <div className="fq-card fq-empty">Carga el catálogo o captura precios de insumos para ver el análisis de costos de tus paletas.</div>
@@ -1817,11 +2192,12 @@ function Graficas({ data }) {
 
       {hayMov ? (
         <>
+      <div className="fq-2col">
       <Panelito titulo="A dónde se va el dinero">
         <BarChart data={porCategoria} layout="vertical">
           <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" horizontal={false} />
           <XAxis type="number" tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
-          <YAxis type="category" dataKey="categoria" width={82} tick={{ fontSize: 11, fill: "#4A6B72" }} axisLine={false} tickLine={false} />
+          <YAxis type="category" dataKey="categoria" width={movil ? 100 : 82} tick={{ fontSize: 11, fill: "#4A6B72" }} axisLine={false} tickLine={false} />
           <Tooltip formatter={(v) => mxn(v)} />
           <Bar dataKey="monto" radius={[0, 3, 3, 0]}>
             {porCategoria.map((_, i) => <Cell key={i} fill={CELL_COLORS[i % CELL_COLORS.length]} />)}
@@ -1831,18 +2207,29 @@ function Graficas({ data }) {
 
       {porSabor.length > 0 && (
         <Panelito titulo="Qué sabores se venden más (piezas)">
-          <BarChart data={porSabor}>
-            <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
-            <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={60} />
-            <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={40} />
+          <BarChart data={porSabor} layout={movil ? "vertical" : "horizontal"}>
+            <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={movil} horizontal={!movil} />
+            {movil ? (
+              <>
+                <XAxis type="number" tick={{ fontSize: 10, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="sabor" width={92} tick={{ fontSize: 10, fill: "#4A6B72" }} axisLine={false} tickLine={false} />
+              </>
+            ) : (
+              <>
+                <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={60} />
+                <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={40} />
+              </>
+            )}
             <Tooltip />
-            <Bar dataKey="piezas" radius={[3, 3, 0, 0]}>
+            <Bar dataKey="piezas" radius={movil ? [0, 3, 3, 0] : [3, 3, 0, 0]}>
               {porSabor.map((_, i) => <Cell key={i} fill={CELL_COLORS[i % CELL_COLORS.length]} />)}
             </Bar>
           </BarChart>
         </Panelito>
       )}
+      </div>
 
+      <div className="fq-2col">
       <Panelito titulo="En qué días del mes compras insumos">
         <BarChart data={porTramo}>
           <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
@@ -1865,6 +2252,7 @@ function Graficas({ data }) {
           <Line type="monotone" dataKey="Utilidad" stroke="#0E2A31" strokeWidth={2} strokeDasharray="4 3" dot={false} />
         </LineChart>
       </Panelito>
+      </div>
         </>
       ) : (
         <div className="fq-card fq-empty">Las gráficas de ingresos y gastos se dibujan en cuanto captures movimientos.</div>
@@ -1873,14 +2261,17 @@ function Graficas({ data }) {
   );
 }
 
-const Panelito = ({ titulo, children }) => (
-  <div className="fq-card" style={{ padding: 14 }}>
-    <div className="fq-eyebrow">{titulo}</div>
-    <div style={{ height: 230, marginTop: 10 }}>
-      <ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer>
+const Panelito = ({ titulo, children }) => {
+  const ancho = useAncho();
+  return (
+    <div className="fq-card" style={{ padding: 14 }}>
+      <div className="fq-eyebrow">{titulo}</div>
+      <div style={{ height: ancho < 768 ? 180 : 230, marginTop: 10 }}>
+        <ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /* ── Ajustes ───────────────────────────────────────────────── */
 function Ajustes({ data, set, guardar }) {
