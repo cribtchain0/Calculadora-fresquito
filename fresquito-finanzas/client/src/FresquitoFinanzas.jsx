@@ -17,13 +17,28 @@ const LINEAS = {
   "Café/Cafetería": "#7A5340",
 };
 
-const CATEGORIAS = ["Insumos", "Empaque", "Transporte", "Renta", "Servicios", "Equipo", "Publicidad", "Eventos", "Otros"];
-const CANALES = ["Evento / carrito", "Distribución", "Venta directa", "Mayoreo", "Otro"];
+const CATEGORIAS = ["Insumos", "Empaque", "Transporte", "Renta", "Servicios", "Equipo", "Publicidad", "Eventos", "Proveedores", "Otros"];
+const CANALES = ["Evento / carrito", "Distribución", "Venta directa", "Mayoreo", "Puntos de venta", "Otro"];
 const UNIDADES = ["kg", "g", "L", "ml", "pieza", "paquete"];
 const TIPOS_INSUMO = ["Fruta", "Lácteo", "Abarrote", "Base en polvo", "Empaque", "Otro"];
 const CELL_COLORS = ["#1FA39C", "#E0A32E", "#D0402E", "#7A5340", "#4C6FA5", "#8E6BA8", "#5B8C3E", "#C2763F"];
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const MERMA_HINT = "Ej. mango ~40%, piña ~45%, maracuyá ~55%, fresa ~5%";
+
+// Color fijo por tipo de insumo, para identificarlos de un vistazo. Evita
+// teal/ámbar/chile a propósito: esos ya significan positivo/advertencia/
+// negativo en el resto de la app (ver regla de gamificación más abajo).
+const TIPO_COLORES = {
+  "Fruta": "#5B8C3E",
+  "Lácteo": "#4C6FA5",
+  "Abarrote": "#C2763F",
+  "Base en polvo": "#7A5340",
+  "Empaque": "#8E6BA8",
+  "Otro": "#6B7280",
+};
+const MOTIVOS_MERMA = ["Se echó a perder", "Se desconoce", "Otro"];
+const CATEGORIAS_ACTIVO = ["Equipo", "Mobiliario", "Vehículo", "Herramienta", "Otro"];
+const CATEGORIAS_PASIVO = ["Préstamo", "Tarjeta de crédito", "Proveedor", "Impuestos", "Otro"];
 
 const DEFAULTS = {
   version: 3,
@@ -32,6 +47,10 @@ const DEFAULTS = {
   recetas: [],
   movimientos: [],
   ajustes: { moldePiezas: 40, ciclosLitros: 4.8, costosFijosMes: 0, usuario: "" },
+  activos: [],
+  pasivos: [],
+  proveedores: [],
+  puntosVenta: [],
 };
 
 /* Catálogo Fresquito — extraído de la guía de producción.
@@ -317,6 +336,13 @@ const partesReceta = (r, data) =>
 
 const costoReceta = (r, data) => partesReceta(r, data).reduce((a, p) => a + p.costo, 0);
 
+// Suma el valor de todo lo que hay en almacén (insumos + bases + paletas
+// terminadas), al costo. Se usa para el patrimonio neto.
+const valorAlmacenTotal = (data) =>
+  data.insumos.reduce((a, i) => a + i.stock * i.costoProm, 0) +
+  data.bases.reduce((a, b) => a + b.stock * costoUnidadBase(b, data.insumos), 0) +
+  data.recetas.reduce((a, r) => a + (r.stock || 0) * (r.piezas > 0 ? costoReceta(r, data) / r.piezas : 0), 0);
+
 /* ── Producción real ───────────────────────────────────────── */
 const PAQ = "__paq__"; // unidad especial "por paquete" al capturar producción
 // Unidades en las que se puede capturar el consumo real de un insumo/base.
@@ -360,7 +386,11 @@ const migrar = (d) => {
   const out = { ...DEFAULTS, ...d, version: 3 };
   out.bases = (out.bases || []).map((b) => ({ stock: 0, costoProm: 0, items: [], ...b }));
   out.insumos = (out.insumos || []).map((i) => ({ tipo: "Otro", merma: 0, historial: [], ultimoCosto: i.costoProm || 0,
-    porPaquete: false, unidadesPorPaquete: 0, nombrePaquete: "", ...i }));
+    porPaquete: false, unidadesPorPaquete: 0, nombrePaquete: "", mermas: [], ...i }));
+  out.activos = (out.activos || []).map((a) => ({ categoria: "Otro", valor: 0, fecha: hoy(), notas: "", ...a }));
+  out.pasivos = (out.pasivos || []).map((p) => ({ categoria: "Otro", monto: 0, fecha: hoy(), notas: "", ...p, fechaLimite: p.fechaLimite || "" }));
+  out.proveedores = (out.proveedores || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], ...p }));
+  out.puntosVenta = (out.puntosVenta || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], ...p }));
   out.recetas = (out.recetas || []).map((r) => ({
     ...r,
     stock: r.stock || 0,
@@ -388,6 +418,8 @@ const NAV_ITEMS = [
   { k: "paletas", l: "Paletas", icono: "paletas", primaria: true },
   { k: "insumos", l: "Insumos", icono: "insumos", primaria: true },
   { k: "bases", l: "Bases", icono: "bases", primaria: false },
+  { k: "activos", l: "Activos", icono: "activos", primaria: false },
+  { k: "proveedores", l: "Proveedores", icono: "proveedores", primaria: false },
   { k: "graficas", l: "Gráficas", icono: "graficas", primaria: false },
   { k: "ajustes", l: "Ajustes", icono: "ajustes", primaria: false },
 ];
@@ -401,6 +433,8 @@ const Icono = ({ n }) => {
   if (n === "paletas") return <svg {...p}><rect x="6" y="2.5" width="8" height="10" rx="3" /><rect x="9.25" y="12.5" width="1.5" height="5" rx="0.7" /></svg>;
   if (n === "graficas") return <svg {...p}><rect x="3" y="11" width="3.4" height="6" rx="1" /><rect x="8.3" y="6.5" width="3.4" height="10.5" rx="1" /><rect x="13.6" y="3" width="3.4" height="14" rx="1" /></svg>;
   if (n === "ajustes") return <svg {...p}><path d="M3 6h5.5M12.5 6h4.5M3 10h9.5M16.5 10h.5M3 14h5.5M12.5 14h4.5" /><circle cx="10" cy="6" r="1.6" /><circle cx="14.5" cy="10" r="1.6" /><circle cx="10" cy="14" r="1.6" /></svg>;
+  if (n === "activos") return <svg {...p}><path d="M3 10h14" /><rect x="4" y="4" width="4.5" height="6" rx="1" /><rect x="11.5" y="10" width="4.5" height="6" rx="1" /></svg>;
+  if (n === "proveedores") return <svg {...p}><path d="M10 17s5.5-5.3 5.5-9.2A5.5 5.5 0 1 0 4.5 7.8C4.5 11.7 10 17 10 17Z" /><circle cx="10" cy="7.6" r="1.8" /></svg>;
   if (n === "mas") return <svg {...p}><circle cx="4" cy="10" r="1.3" /><circle cx="10" cy="10" r="1.3" /><circle cx="16" cy="10" r="1.3" /></svg>;
   return null;
 };
@@ -578,6 +612,53 @@ const Metrica = ({ eyebrow, valor, color, sub, logro }) => (
   </div>
 );
 
+// Verificación antes de borrar: el botón se convierte en "¿Seguro?" con
+// Sí/Cancelar inline (se revierte solo a los 4s si no se toca). Al
+// confirmar se sigue usando pedirBorrar (borrado optimista + 5s de
+// Deshacer como segunda red de seguridad).
+function BotonBorrar({ onBorrar, etiqueta = "Borrar", chico, style }) {
+  const [confirmando, setConfirmando] = useState(false);
+  useEffect(() => {
+    if (!confirmando) return;
+    const t = setTimeout(() => setConfirmando(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmando]);
+  const btnEstilo = chico ? { padding: "3px 8px", fontSize: 12 } : {};
+  if (!confirmando)
+    return <button className="fq-btn danger" style={{ ...btnEstilo, ...style }} onClick={(e) => { e.stopPropagation(); setConfirmando(true); }}>{etiqueta}</button>;
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 6, ...style }} onClick={(e) => e.stopPropagation()}>
+      <span style={{ fontSize: 12, color: "var(--chile)", fontWeight: 600, whiteSpace: "nowrap" }}>¿Seguro?</span>
+      <button className="fq-btn danger" style={{ ...btnEstilo, flex: 1 }} onClick={() => { setConfirmando(false); onBorrar(); }}>Sí, borrar</button>
+      <button className="fq-btn ghost" style={{ ...btnEstilo, flex: 1 }} onClick={() => setConfirmando(false)}>Cancelar</button>
+    </span>
+  );
+}
+
+// Campo sensible (precio, existencia, saldo...): guarda un borrador local y
+// solo aplica el cambio cuando se confirma con ✓, en vez de autoguardar
+// cada tecla directo a Supabase como el resto de los campos.
+function CampoConfirmado({ label, hint, valor, onConfirmar }) {
+  const [draft, setDraft] = useState(String(valor ?? ""));
+  useEffect(() => { setDraft(String(valor ?? "")); }, [valor]);
+  const distinto = draft !== "" && Number(draft) !== Number(valor || 0);
+  return (
+    <Campo label={label} hint={distinto ? "Sin guardar todavía — confirma con ✓" : hint}>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input type="number" inputMode="decimal" className="fq-in" value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          style={distinto ? { borderColor: "var(--ambar)" } : {}} />
+        {distinto && (
+          <>
+            <button className="fq-btn" style={{ padding: "0 12px" }} onClick={() => onConfirmar(Number(draft) || 0)}>✓</button>
+            <button className="fq-btn ghost" style={{ padding: "0 12px" }} onClick={() => setDraft(String(valor ?? ""))}>✕</button>
+          </>
+        )}
+      </div>
+    </Campo>
+  );
+}
+
 /* ── App ───────────────────────────────────────────────────── */
 export default function FresquitoFinanzas() {
   const [data, setData] = useState(DEFAULTS);
@@ -689,7 +770,7 @@ export default function FresquitoFinanzas() {
     );
 
   const irA = (k) => { setVista(k); setMasAbierto(false); };
-  const enMas = ["bases", "graficas", "ajustes"].includes(vista);
+  const enMas = NAV_ITEMS.some((n) => !n.primaria && n.k === vista);
 
   return (
     <div className="fq">
@@ -720,6 +801,8 @@ export default function FresquitoFinanzas() {
             {vista === "insumos" && <Insumos data={data} set={set} pedirBorrar={pedirBorrar} />}
             {vista === "bases" && <Bases data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "paletas" && <Paletas data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "activos" && <ActivosPasivos data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "proveedores" && <Proveedores data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "graficas" && <Graficas data={data} />}
             {vista === "ajustes" && <Ajustes data={data} set={set} guardar={guardar} />}
           </main>
@@ -777,6 +860,13 @@ function Panel({ data }) {
   const piezasEnStock = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const sinCosto = data.insumos.filter((i) => !i.costoProm).length;
 
+  const totalActivos = data.activos.reduce((a, x) => a + (Number(x.valor) || 0), 0);
+  const totalPasivos = data.pasivos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
+  const patrimonio = totalActivos + valInsumos + valBases + valPaletas - totalPasivos;
+
+  const proveedoresPorPagar = data.proveedores.filter((p) => p.adeudo > 0).sort((a, b) => b.adeudo - a.adeudo);
+  const puntosPorCobrar = data.puntosVenta.filter((p) => p.adeudo > 0).sort((a, b) => b.adeudo - a.adeudo);
+
   const serie = useMemo(() => {
     const mapa = {};
     for (let i = 5; i >= 0; i--) {
@@ -818,6 +908,11 @@ function Panel({ data }) {
           <Metrica eyebrow="Egresos del mes" valor={mxn(egr)} color="var(--chile)" />
           <Metrica eyebrow="Utilidad" valor={mxn(util)} color={util >= 0 ? "var(--tinta)" : "var(--chile)"}
             sub={ing > 0 ? `Margen ${num((util / ing) * 100, 1)}%` : "Sin ingresos este mes"} logro={logroUtilidad} />
+        </div>
+
+        <div className="fq-metrica-grid">
+          <Metrica eyebrow="Patrimonio neto" valor={mxn(patrimonio)} color={patrimonio >= 0 ? "var(--teal)" : "var(--chile)"}
+            sub="Activos + valor de almacén − pasivos" />
         </div>
 
         <div className="fq-metrica-grid">
@@ -867,6 +962,30 @@ function Panel({ data }) {
             </div>
           ))}
         </div>
+
+        {proveedoresPorPagar.length > 0 && (
+          <div className="fq-card">
+            <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Proveedores por pagar</div>
+            {proveedoresPorPagar.slice(0, 5).map((p) => (
+              <div className="fq-row" key={p.id}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.nombre}</span>
+                <span className="fq-num" style={{ color: "var(--chile)", fontSize: 13 }}>{mxn(p.adeudo)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {puntosPorCobrar.length > 0 && (
+          <div className="fq-card">
+            <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Puntos de venta por cobrar</div>
+            {puntosPorCobrar.slice(0, 5).map((p) => (
+              <div className="fq-row" key={p.id}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.nombre}</span>
+                <span className="fq-num" style={{ color: "var(--chile)", fontSize: 13 }}>{mxn(p.adeudo)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1110,7 +1229,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
                 {m.tipo === "ingreso" ? "+" : "−"}{mxn(m.monto)}
               </span>
               <button className="fq-btn ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => repetir(m)}>Repetir</button>
-              <button className="fq-btn danger" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => borrar(m.id)}>×</button>
+              <BotonBorrar chico etiqueta="×" onBorrar={() => borrar(m.id)} />
             </div>
           </div>
         ))}
@@ -1128,6 +1247,8 @@ function Insumos({ data, set, pedirBorrar }) {
   const [sel, setSel] = useState(null);
   const [busca, setBusca] = useState("");
   const [soloSinPrecio, setSoloSinPrecio] = useState(false);
+  const [orden, setOrden] = useState("alfabetico"); // alfabetico | tipo
+  const [tipoFiltro, setTipoFiltro] = useState("todos");
   const [guardadoTick, setGuardadoTick] = useState(0);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
@@ -1150,6 +1271,17 @@ function Insumos({ data, set, pedirBorrar }) {
   const editar = (id, k, v) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, [k]: TEXTO.includes(k) ? v : Number(v) || 0 } : i)) });
   const editarPatch = (id, patch) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, ...patch } : i)) });
   const borrar = (id) => pedirBorrar({ ...data, insumos: data.insumos.filter((i) => i.id !== id) }, "Insumo eliminado");
+
+  // Resta existencia y deja registro de por qué (perecederos: control de
+  // mermas además de compras y producción). Cap 40, igual que historial.
+  const registrarMerma = (id, entrada) => set({
+    insumos: data.insumos.map((i) => (i.id !== id ? i : {
+      ...i,
+      stock: Math.max(0, i.stock - entrada.cantidad),
+      mermas: [{ id: uid(), fecha: entrada.fecha || hoy(), cantidad: entrada.cantidad, motivo: entrada.motivo, nota: entrada.nota },
+        ...(i.mermas || [])].slice(0, 40),
+    })),
+  });
 
   // Cambiar de kg a g (o de L a ml) convierte existencia, precio, historial
   // y TODAS las cantidades en recetas y bases. Así nada se descuadra.
@@ -1180,8 +1312,12 @@ function Insumos({ data, set, pedirBorrar }) {
 
   const valorTotal = data.insumos.reduce((a, i) => a + i.stock * i.costoProm, 0);
   const sinPrecio = data.insumos.filter((i) => !i.costoProm).length;
-  const lista = data.insumos.filter((i) =>
-    i.nombre.toLowerCase().includes(busca.toLowerCase()) && (!soloSinPrecio || !i.costoProm));
+  const lista = data.insumos
+    .filter((i) => i.nombre.toLowerCase().includes(busca.toLowerCase()) && (!soloSinPrecio || !i.costoProm)
+      && (tipoFiltro === "todos" || i.tipo === tipoFiltro))
+    .sort((a, b) => orden === "tipo"
+      ? (a.tipo || "Otro").localeCompare(b.tipo || "Otro") || a.nombre.localeCompare(b.nombre)
+      : a.nombre.localeCompare(b.nombre));
 
   return (
     <div className="fq-grid">
@@ -1196,6 +1332,23 @@ function Insumos({ data, set, pedirBorrar }) {
         <button className="fq-btn ghost" style={{ whiteSpace: "nowrap" }} onClick={() => setSoloSinPrecio(!soloSinPrecio)}
           >{soloSinPrecio ? "Ver todos" : "Sin precio"}</button>
       </div>
+
+      {data.insumos.length > 0 && (
+        <>
+          <div style={{ display: "flex", gap: 6 }}>
+            {[["alfabetico", "Alfabético"], ["tipo", "Por tipo"]].map(([k, l]) => (
+              <button key={k} className="fq-chip" onClick={() => setOrden(k)}
+                style={orden === k ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}>{l}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+            {["todos", ...TIPOS_INSUMO].map((t) => (
+              <button key={t} className="fq-chip" onClick={() => setTipoFiltro(t)}
+                style={tipoFiltro === t ? { background: TIPO_COLORES[t] || "var(--tinta)", color: "#fff", borderColor: "transparent" } : {}}>{t}</button>
+            ))}
+          </div>
+        </>
+      )}
 
       <button className="fq-btn" onClick={() => setAbierto(!abierto)}>{abierto ? "Cancelar" : "Agregar insumo"}</button>
 
@@ -1248,11 +1401,17 @@ function Insumos({ data, set, pedirBorrar }) {
               ? "Sin insumos. Puedes cargar el catálogo completo desde Ajustes."
               : "Ningún insumo coincide con la búsqueda."}
           </div>
-        ) : lista.map((i) => (
+        ) : lista.map((i, idx) => (
           <div key={i.id}>
+            {orden === "tipo" && (idx === 0 || (lista[idx - 1].tipo || "Otro") !== (i.tipo || "Otro")) && (
+              <div className="fq-eyebrow" style={{ padding: "10px 13px 4px", color: TIPO_COLORES[i.tipo] || TIPO_COLORES.Otro }}>
+                {i.tipo || "Otro"}
+              </div>
+            )}
             <div className="fq-row" style={{ cursor: "pointer" }} onClick={() => setSel(sel === i.id ? null : i.id)}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 8, flexShrink: 0, background: TIPO_COLORES[i.tipo] || TIPO_COLORES.Otro }} />
                   {i.nombre}
                   {Number(i.merma) > 0 && <span className="fq-chip">merma {num(i.merma, 0)}%</span>}
                   {!i.costoProm && <span className="fq-chip" style={{ color: "var(--ambar)", borderColor: "var(--ambar)" }}>sin precio</span>}
@@ -1272,7 +1431,7 @@ function Insumos({ data, set, pedirBorrar }) {
                 <button className="fq-btn ghost" style={{ padding: "3px 9px" }} onClick={(e) => { e.stopPropagation(); ajustar(i.id, 1); }}>+</button>
               </div>
             </div>
-            {sel === i.id && <DetalleInsumo i={i} editar={editar} editarPatch={editarPatch} borrar={borrar} cambiarUnidad={cambiarUnidad} />}
+            {sel === i.id && <DetalleInsumo i={i} editar={editar} editarPatch={editarPatch} borrar={borrar} cambiarUnidad={cambiarUnidad} registrarMerma={registrarMerma} />}
           </div>
         ))}
       </div>
@@ -1280,7 +1439,7 @@ function Insumos({ data, set, pedirBorrar }) {
   );
 }
 
-function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad }) {
+function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad, registrarMerma }) {
   const h = i.historial || [];
   const costos = h.map((x) => x.costo);
   const min = costos.length ? Math.min(...costos) : i.costoProm;
@@ -1322,12 +1481,11 @@ function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad }) {
       </div>
 
       <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-        <Campo label={`Precio por ${i.unidad}`} hint="Cámbialo cuando quieras; las compras lo recalculan solo.">
-          <input type="number" inputMode="decimal" className="fq-in" value={i.costoProm || ""} placeholder="0.00"
-            onChange={(e) => editar(i.id, "costoProm", e.target.value)} />
-        </Campo>
+        <CampoConfirmado label={`Precio por ${i.unidad}`} hint="Cámbialo cuando quieras; las compras lo recalculan solo."
+          valor={i.costoProm || 0} onConfirmar={(v) => editar(i.id, "costoProm", v)} />
         <Campo label="Merma (%)"><input type="number" className="fq-in" value={i.merma || 0} onChange={(e) => editar(i.id, "merma", e.target.value)} /></Campo>
-        <Campo label="Existencia"><input type="number" className="fq-in" value={i.stock || 0} onChange={(e) => editar(i.id, "stock", e.target.value)} /></Campo>
+        <CampoConfirmado label="Existencia" hint="Para pérdidas con motivo, usa 'Registrar pérdida o ajuste' más abajo."
+          valor={i.stock || 0} onConfirmar={(v) => editar(i.id, "stock", v)} />
         <Campo label="Mínimo para avisar"><input type="number" className="fq-in" value={i.stockMin || 0} onChange={(e) => editar(i.id, "stockMin", e.target.value)} /></Campo>
       </div>
       <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
@@ -1395,7 +1553,64 @@ function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad }) {
         </div>
       )}
 
-      <button className="fq-btn danger" style={{ width: "100%", marginTop: 10 }} onClick={() => borrar(i.id)}>Borrar insumo</button>
+      <FormMerma i={i} registrarMerma={registrarMerma} />
+
+      <BotonBorrar etiqueta="Borrar insumo" onBorrar={() => borrar(i.id)} style={{ width: "100%", marginTop: 10 }} />
+    </div>
+  );
+}
+
+/* Perecederos: registra por qué bajó la existencia (se echó a perder, se
+   desconoce, otro motivo) además de compras y producción. */
+function FormMerma({ i, registrarMerma }) {
+  const [cantidad, setCantidad] = useState("");
+  const [motivo, setMotivo] = useState(MOTIVOS_MERMA[0]);
+  const [nota, setNota] = useState("");
+  const mermas = i.mermas || [];
+
+  const registrar = () => {
+    const c = Number(cantidad) || 0;
+    if (c <= 0) return;
+    registrarMerma(i.id, { cantidad: c, motivo, nota: nota.trim() });
+    setCantidad(""); setNota("");
+  };
+
+  const colorMotivo = (m) => (m === "Se echó a perder" ? "var(--chile)" : m === "Se desconoce" ? "var(--ambar)" : "var(--tinta-70)");
+
+  return (
+    <div style={{ marginTop: 12, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+      <div className="fq-eyebrow">Registrar pérdida o ajuste</div>
+      <div className="fq-hint" style={{ marginBottom: 8 }}>Para perecederos: resta de la existencia y deja registro de qué pasó.</div>
+      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+        <Campo label={`Cantidad (${i.unidad})`}>
+          <input type="number" inputMode="decimal" className="fq-in" placeholder="0" value={cantidad} onChange={(e) => setCantidad(e.target.value)} />
+        </Campo>
+        <Campo label="Motivo">
+          <select className="fq-in" value={motivo} onChange={(e) => setMotivo(e.target.value)}>
+            {MOTIVOS_MERMA.map((m) => <option key={m}>{m}</option>)}
+          </select>
+        </Campo>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <Campo label="Nota (opcional)">
+          <input className="fq-in" placeholder={motivo === "Otro" ? "Ej. se lo comió el perro" : "Detalle opcional"} value={nota} onChange={(e) => setNota(e.target.value)} />
+        </Campo>
+      </div>
+      <button className="fq-btn ghost" style={{ width: "100%", marginTop: 10 }} disabled={!(Number(cantidad) > 0)} onClick={registrar}>Registrar</button>
+
+      {mermas.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {mermas.slice(0, 6).map((m) => (
+            <div className="fq-row" key={m.id} style={{ padding: "6px 0" }}>
+              <div>
+                <span className="fq-chip" style={{ color: colorMotivo(m.motivo), borderColor: colorMotivo(m.motivo) }}>{m.motivo}</span>
+                {m.nota && <span style={{ fontSize: 12, color: "var(--tinta-70)", marginLeft: 6 }}>{m.nota}</span>}
+              </div>
+              <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-40)" }}>{m.fecha} · −{num(m.cantidad)} {i.unidad}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1562,7 +1777,7 @@ function Bases({ data, guardar, pedirBorrar }) {
                 value={lotes[b.id] || ""} onChange={(e) => setLotes({ ...lotes, [b.id]: e.target.value })} />
               <button className="fq-btn" style={{ flex: 2 }} onClick={() => producir(b, lotes[b.id])}>Producir lote</button>
               <button className="fq-btn ghost" onClick={() => setEditando(b.id)}>Editar</button>
-              <button className="fq-btn danger" onClick={() => borrar(b.id)}>×</button>
+              <BotonBorrar etiqueta="×" onBorrar={() => borrar(b.id)} />
             </div>
           </div>
         );
@@ -1901,7 +2116,7 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
 
           <div style={{ display: "flex", gap: 6, marginTop: 13 }}>
             <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onEditar}>Editar receta</button>
-            <button className="fq-btn danger" onClick={() => borrar(r.id)}>Borrar</button>
+            <BotonBorrar etiqueta="Borrar" onBorrar={() => borrar(r.id)} />
           </div>
         </div>
       </div>
@@ -2021,6 +2236,348 @@ function ProducirReceta({ r, data, producir, porPieza }) {
       <button className="fq-btn" style={{ width: "100%", marginTop: 10 }} onClick={confirmar}>Registrar producción</button>
       <div style={{ fontSize: 11, color: "var(--tinta-40)", marginTop: 7 }}>
         Descuenta del inventario lo que capturaste aquí (no la receta), guarda el costo real y mete las paletas al stock.
+      </div>
+    </div>
+  );
+}
+
+/* ── Activos y pasivos ─────────────────────────────────────── */
+function FormActivo({ inicial, onGuardar, onCancelar }) {
+  const [f, setF] = useState(inicial);
+  const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div className="fq-card" style={{ padding: 14 }}>
+      <div className="fq-grid" style={{ gridTemplateColumns: "2fr 1fr" }}>
+        <Campo label="Nombre"><input className="fq-in" placeholder="Ej. Congelador vertical" value={f.nombre} onChange={c("nombre")} /></Campo>
+        <Campo label="Categoría"><select className="fq-in" value={f.categoria} onChange={c("categoria")}>{CATEGORIAS_ACTIVO.map((x) => <option key={x}>{x}</option>)}</select></Campo>
+      </div>
+      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+        <Campo label="Valor"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.valor} onChange={c("valor")} /></Campo>
+        <Campo label="Fecha"><input type="date" className="fq-in" value={f.fecha} onChange={c("fecha")} /></Campo>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Campo label="Notas"><input className="fq-in" placeholder="Marca, estado, dónde está…" value={f.notas} onChange={c("notas")} /></Campo>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button className="fq-btn" style={{ flex: 2 }}
+          onClick={() => f.nombre.trim() && onGuardar({ ...f, nombre: f.nombre.trim(), valor: Number(f.valor) || 0 })}>Guardar activo</button>
+        <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onCancelar}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function FormPasivo({ inicial, onGuardar, onCancelar }) {
+  const [f, setF] = useState(inicial);
+  const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div className="fq-card" style={{ padding: 14 }}>
+      <div className="fq-grid" style={{ gridTemplateColumns: "2fr 1fr" }}>
+        <Campo label="Nombre o acreedor"><input className="fq-in" placeholder="Ej. Préstamo Banorte" value={f.nombre} onChange={c("nombre")} /></Campo>
+        <Campo label="Categoría"><select className="fq-in" value={f.categoria} onChange={c("categoria")}>{CATEGORIAS_PASIVO.map((x) => <option key={x}>{x}</option>)}</select></Campo>
+      </div>
+      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr 1fr", marginTop: 10 }}>
+        <Campo label="Saldo actual"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.monto} onChange={c("monto")} /></Campo>
+        <Campo label="Fecha"><input type="date" className="fq-in" value={f.fecha} onChange={c("fecha")} /></Campo>
+        <Campo label="Vence (opcional)"><input type="date" className="fq-in" value={f.fechaLimite} onChange={c("fechaLimite")} /></Campo>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Campo label="Notas"><input className="fq-in" placeholder="Tasa, plazo, condiciones…" value={f.notas} onChange={c("notas")} /></Campo>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button className="fq-btn" style={{ flex: 2 }}
+          onClick={() => f.nombre.trim() && onGuardar({ ...f, nombre: f.nombre.trim(), monto: Number(f.monto) || 0 })}>Guardar pasivo</button>
+        <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onCancelar}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
+function ActivosPasivos({ data, guardar, pedirBorrar }) {
+  const [editandoActivo, setEditandoActivo] = useState(null); // "nuevo" | id | null
+  const [editandoPasivo, setEditandoPasivo] = useState(null);
+
+  const totalActivos = data.activos.reduce((a, x) => a + (Number(x.valor) || 0), 0);
+  const totalPasivos = data.pasivos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
+  const patrimonio = totalActivos + valorAlmacenTotal(data) - totalPasivos;
+
+  const vacioActivo = { nombre: "", categoria: "Equipo", valor: "", fecha: hoy(), notas: "" };
+  const vacioPasivo = { nombre: "", categoria: "Préstamo", monto: "", fecha: hoy(), fechaLimite: "", notas: "" };
+
+  const guardarActivo = (f) => {
+    if (editandoActivo === "nuevo") guardar({ ...data, activos: [...data.activos, { ...f, id: uid() }] });
+    else guardar({ ...data, activos: data.activos.map((a) => (a.id === editandoActivo ? { ...a, ...f } : a)) });
+    setEditandoActivo(null);
+  };
+  const borrarActivo = (id) => { setEditandoActivo(null); pedirBorrar({ ...data, activos: data.activos.filter((a) => a.id !== id) }, "Activo eliminado"); };
+
+  const guardarPasivo = (f) => {
+    if (editandoPasivo === "nuevo") guardar({ ...data, pasivos: [...data.pasivos, { ...f, id: uid() }] });
+    else guardar({ ...data, pasivos: data.pasivos.map((p) => (p.id === editandoPasivo ? { ...p, ...f } : p)) });
+    setEditandoPasivo(null);
+  };
+  const borrarPasivo = (id) => { setEditandoPasivo(null); pedirBorrar({ ...data, pasivos: data.pasivos.filter((p) => p.id !== id) }, "Pasivo eliminado"); };
+
+  return (
+    <div className="fq-grid">
+      <div className="fq-metrica-grid">
+        <Metrica eyebrow="Activos" valor={mxn(totalActivos)} />
+        <Metrica eyebrow="Pasivos" valor={mxn(totalPasivos)} color={totalPasivos > 0 ? "var(--chile)" : "var(--tinta)"} />
+        <Metrica eyebrow="Patrimonio neto" valor={mxn(patrimonio)} color={patrimonio >= 0 ? "var(--teal)" : "var(--chile)"}
+          sub="Activos + valor de almacén − pasivos" />
+      </div>
+
+      <div className="fq-eyebrow">Activos</div>
+      {editandoActivo === "nuevo" ? (
+        <FormActivo inicial={vacioActivo} onGuardar={guardarActivo} onCancelar={() => setEditandoActivo(null)} />
+      ) : (
+        <button className="fq-btn" onClick={() => setEditandoActivo("nuevo")}>Agregar activo</button>
+      )}
+      <div className="fq-card">
+        {data.activos.length === 0 ? <div className="fq-empty">Sin activos registrados.</div> : data.activos.map((a) => {
+          if (editandoActivo === a.id)
+            return <FormActivo key={a.id} inicial={a} onGuardar={guardarActivo} onCancelar={() => setEditandoActivo(null)} />;
+          return (
+            <div className="fq-row" key={a.id}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{a.nombre}</div>
+                <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)" }}>{a.categoria} · {a.fecha}{a.notas ? ` · ${a.notas}` : ""}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span className="fq-num" style={{ fontWeight: 600, fontSize: 14 }}>{mxn(a.valor)}</span>
+                <button className="fq-btn ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditandoActivo(a.id)}>Editar</button>
+                <BotonBorrar chico etiqueta="×" onBorrar={() => borrarActivo(a.id)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="fq-eyebrow" style={{ marginTop: 4 }}>Pasivos</div>
+      {editandoPasivo === "nuevo" ? (
+        <FormPasivo inicial={vacioPasivo} onGuardar={guardarPasivo} onCancelar={() => setEditandoPasivo(null)} />
+      ) : (
+        <button className="fq-btn" onClick={() => setEditandoPasivo("nuevo")}>Agregar pasivo</button>
+      )}
+      <div className="fq-card">
+        {data.pasivos.length === 0 ? <div className="fq-empty">Sin pasivos registrados.</div> : data.pasivos.map((p) => {
+          if (editandoPasivo === p.id)
+            return <FormPasivo key={p.id} inicial={p} onGuardar={guardarPasivo} onCancelar={() => setEditandoPasivo(null)} />;
+          return (
+            <div className="fq-row" key={p.id}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{p.nombre}</div>
+                <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)" }}>
+                  {p.categoria} · {p.fecha}{p.fechaLimite ? ` · vence ${p.fechaLimite}` : ""}{p.notas ? ` · ${p.notas}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, color: "var(--chile)" }}>{mxn(p.monto)}</span>
+                <button className="fq-btn ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => setEditandoPasivo(p.id)}>Editar</button>
+                <BotonBorrar chico etiqueta="×" onBorrar={() => borrarPasivo(p.id)} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ── Proveedores y puntos de venta ────────────────────────────
+   Módulo de relación y adeudo — no mueve inventario (comprar insumos
+   sigue siendo solo Movimientos). El crédito que solo se acumula
+   (compra/entrega) no genera movimiento; los pagos y cobros reales
+   sí, porque ahí sí se movió dinero. */
+function DetalleProveedor({ item, esProveedor, onEditar, onEvento, onBorrar }) {
+  const [monto, setMonto] = useState("");
+  const [notas, setNotas] = useState("");
+  const eventos = item.eventos || [];
+
+  const etiquetaAcumula = esProveedor ? "Compra a crédito" : "Entrega a crédito";
+  const etiquetaAbono = esProveedor ? "Registrar pago" : "Registrar cobro";
+  const tipoAcumula = esProveedor ? "compra" : "entrega";
+  const tipoAbono = esProveedor ? "pago" : "cobro";
+
+  const disparar = (tipoEvento) => {
+    const m = Number(monto) || 0;
+    if (m <= 0) return;
+    onEvento({ tipoEvento, monto: m, notas: notas.trim() });
+    setMonto(""); setNotas("");
+  };
+
+  const etiquetaEvento = (t) => ({ compra: "Compra a crédito", pago: "Pago", entrega: "Entrega a crédito", cobro: "Cobro" }[t] || t);
+  const esAbonoTipo = (t) => t === "pago" || t === "cobro";
+
+  // Saldo de adeudo después de cada evento, del más viejo al más nuevo,
+  // para la mini-gráfica (mismo patrón que el historial de precios).
+  const saldos = eventos.slice().reverse().reduce((acc, ev) => {
+    const prev = acc.length ? acc[acc.length - 1] : 0;
+    acc.push(esAbonoTipo(ev.tipo) ? Math.max(0, prev - ev.monto) : prev + ev.monto);
+    return acc;
+  }, []);
+  const path = saldos.length >= 3 ? sparklinePath(saldos, 260, 60) : "";
+
+  return (
+    <div style={{ padding: "0 13px 14px", background: "var(--escarcha)" }}>
+      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", paddingTop: 12 }}>
+        <Campo label="Nombre"><input className="fq-in" value={item.nombre} onChange={(e) => onEditar({ nombre: e.target.value })} /></Campo>
+        <Campo label="Ubicación"><input className="fq-in" value={item.ubicacion || ""} placeholder="Colonia, ciudad…" onChange={(e) => onEditar({ ubicacion: e.target.value })} /></Campo>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Campo label={esProveedor ? "Qué nos surte" : "Qué le surtimos"}>
+          <input className="fq-in" value={item.notas || ""} onChange={(e) => onEditar({ notas: e.target.value })} />
+        </Campo>
+      </div>
+
+      <div style={{ marginTop: 12, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+        <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Registrar movimiento</div>
+        <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <Campo label="Monto"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={monto} onChange={(e) => setMonto(e.target.value)} /></Campo>
+          <Campo label="Nota (opcional)"><input className="fq-in" placeholder={esProveedor ? "Qué se compró" : "Qué se entregó"} value={notas} onChange={(e) => setNotas(e.target.value)} /></Campo>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button className="fq-btn ghost" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar(tipoAcumula)}>{etiquetaAcumula}</button>
+          <button className="fq-btn" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar(tipoAbono)}>{etiquetaAbono}</button>
+        </div>
+        <div className="fq-hint" style={{ marginTop: 8 }}>
+          "{etiquetaAcumula}" solo suma al adeudo. "{etiquetaAbono}" lo resta y sí queda registrado en Movimientos.
+        </div>
+      </div>
+
+      {eventos.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div className="fq-eyebrow" style={{ marginBottom: 5 }}>Cómo se ha movido el adeudo</div>
+          {path && (
+            <svg width="100%" height="50" viewBox="0 0 260 60" preserveAspectRatio="none" style={{ marginBottom: 6 }}>
+              <path d={path} fill="none" stroke="var(--teal)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
+          {eventos.slice(0, 8).map((ev) => (
+            <div className="fq-row" key={ev.id} style={{ padding: "6px 0" }}>
+              <div>
+                <span className="fq-chip" style={esAbonoTipo(ev.tipo) ? { color: "var(--teal)", borderColor: "var(--teal)" } : { color: "var(--chile)", borderColor: "var(--chile)" }}>
+                  {etiquetaEvento(ev.tipo)}
+                </span>
+                {ev.notas && <span style={{ fontSize: 12, color: "var(--tinta-70)", marginLeft: 6 }}>{ev.notas}</span>}
+              </div>
+              <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-40)" }}>{ev.fecha} · {mxn(ev.monto)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <BotonBorrar etiqueta={esProveedor ? "Borrar proveedor" : "Borrar punto de venta"} onBorrar={onBorrar} style={{ width: "100%", marginTop: 12 }} />
+    </div>
+  );
+}
+
+function Proveedores({ data, guardar, pedirBorrar }) {
+  const [vista, setVista] = useState("proveedores"); // proveedores | puntosVenta
+  const [abierto, setAbierto] = useState(false);
+  const [sel, setSel] = useState(null);
+  const esProveedor = vista === "proveedores";
+  const lista = data[vista];
+
+  const vacio = { nombre: "", ubicacion: "", adeudo: "", notas: "" };
+  const [f, setF] = useState(vacio);
+  const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  const agregar = () => {
+    if (!f.nombre.trim()) return;
+    const nuevo = { id: uid(), nombre: f.nombre.trim(), ubicacion: f.ubicacion.trim(), notas: f.notas.trim(),
+      adeudo: Number(f.adeudo) || 0, eventos: [] };
+    guardar({ ...data, [vista]: [...lista, nuevo] });
+    setF(vacio); setAbierto(false);
+  };
+
+  const editar = (id, patch) => guardar({ ...data, [vista]: lista.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+  const borrar = (id) => {
+    setSel(null);
+    pedirBorrar({ ...data, [vista]: lista.filter((x) => x.id !== id) }, esProveedor ? "Proveedor eliminado" : "Punto de venta eliminado");
+  };
+
+  // Los abonos (pago/cobro) sí generan un movimiento real de caja; el
+  // crédito que solo se acumula (compra/entrega) solo mueve el adeudo.
+  const registrarEvento = (id, { tipoEvento, monto, notas }) => {
+    const item = lista.find((x) => x.id === id);
+    if (!item || !(monto > 0)) return;
+    const esAbono = tipoEvento === "pago" || tipoEvento === "cobro";
+    const evento = { id: uid(), fecha: hoy(), tipo: tipoEvento, monto, notas };
+    const nuevoAdeudo = esAbono ? Math.max(0, (item.adeudo || 0) - monto) : (item.adeudo || 0) + monto;
+    const nuevaLista = lista.map((x) => (x.id === id
+      ? { ...x, adeudo: nuevoAdeudo, eventos: [evento, ...(x.eventos || [])].slice(0, 60) }
+      : x));
+
+    let movimientos = data.movimientos;
+    if (esAbono) {
+      const base = { id: uid(), fecha: hoy(), monto, lugar: item.nombre,
+        insumoId: "", cantidad: 0, mayoreo: false, recurrente: false, recetaId: "", piezas: 0,
+        capturadoPor: data.ajustes.usuario || "" };
+      const mov = esProveedor
+        ? { ...base, tipo: "gasto", categoria: "Proveedores", canal: "", notas: notas || `Pago a ${item.nombre}` }
+        : { ...base, tipo: "ingreso", categoria: "", canal: "Puntos de venta", notas: notas || `Cobro a ${item.nombre}` };
+      movimientos = [mov, ...data.movimientos];
+    }
+    guardar({ ...data, [vista]: nuevaLista, movimientos });
+  };
+
+  const totalAdeudo = lista.reduce((a, x) => a + (Number(x.adeudo) || 0), 0);
+
+  return (
+    <div className="fq-grid">
+      <div style={{ display: "flex", gap: 6 }}>
+        {[["proveedores", "Proveedores"], ["puntosVenta", "Puntos de venta"]].map(([k, l]) => (
+          <button key={k} className={"fq-btn" + (vista === k ? "" : " ghost")} style={{ flex: 1 }}
+            onClick={() => { setVista(k); setSel(null); setAbierto(false); }}>{l}</button>
+        ))}
+      </div>
+
+      <div className="fq-metrica-grid">
+        <Metrica eyebrow={esProveedor ? "Proveedores" : "Puntos de venta"} valor={lista.length} />
+        <Metrica eyebrow={esProveedor ? "Les debemos" : "Nos deben"} valor={mxn(totalAdeudo)} color={totalAdeudo > 0 ? "var(--chile)" : "var(--teal)"} />
+      </div>
+
+      <button className="fq-btn" onClick={() => setAbierto(!abierto)}>
+        {abierto ? "Cancelar" : esProveedor ? "Agregar proveedor" : "Agregar punto de venta"}
+      </button>
+
+      {abierto && (
+        <div className="fq-card" style={{ padding: 14 }}>
+          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <Campo label="Nombre"><input className="fq-in" placeholder={esProveedor ? "Ej. Central de abasto" : "Ej. Minisúper La Esquina"} value={f.nombre} onChange={c("nombre")} /></Campo>
+            <Campo label="Ubicación"><input className="fq-in" placeholder="Colonia, ciudad…" value={f.ubicacion} onChange={c("ubicacion")} /></Campo>
+          </div>
+          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <Campo label={esProveedor ? "Qué nos surte" : "Qué le surtimos"}><input className="fq-in" placeholder="Ej. fruta y empaque" value={f.notas} onChange={c("notas")} /></Campo>
+            <Campo label="Adeudo inicial (opcional)"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.adeudo} onChange={c("adeudo")} /></Campo>
+          </div>
+          <button className="fq-btn" style={{ width: "100%", marginTop: 12 }} onClick={agregar}>Guardar</button>
+        </div>
+      )}
+
+      <div className="fq-card">
+        {lista.length === 0 ? (
+          <div className="fq-empty">{esProveedor ? "Sin proveedores registrados." : "Sin puntos de venta registrados."}</div>
+        ) : lista.map((x) => (
+          <div key={x.id}>
+            <div className="fq-row" style={{ cursor: "pointer" }} onClick={() => setSel(sel === x.id ? null : x.id)}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{x.nombre}</div>
+                <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)" }}>
+                  {x.ubicacion || "Sin ubicación"}{x.notas ? ` · ${x.notas}` : ""}
+                </div>
+              </div>
+              <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, color: x.adeudo > 0 ? "var(--chile)" : "var(--teal)" }}>
+                {x.adeudo > 0 ? mxn(x.adeudo) : "Al corriente"}
+              </span>
+            </div>
+            {sel === x.id && (
+              <DetalleProveedor item={x} esProveedor={esProveedor} onEditar={(patch) => editar(x.id, patch)}
+                onEvento={(ev) => registrarEvento(x.id, ev)} onBorrar={() => borrar(x.id)} />
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );

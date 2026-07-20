@@ -21,8 +21,9 @@ server/               (legado) Antiguo backend Express + SQLite; solo queda
 ## Cómo está guardado todo en Supabase
 
 Tablas normalizadas: `insumos`, `bases`, `recetas`, `movimientos`,
-`ajustes`, más `snapshots` (respaldo automático de cada guardado, máx.
-200) y `libro_meta` (señal para la sincronización en tiempo real).
+`ajustes`, `activos`, `pasivos`, `proveedores`, `puntos_venta`, más
+`snapshots` (respaldo automático de cada guardado, máx. 200) y
+`libro_meta` (señal para la sincronización en tiempo real).
 
 La app sigue trabajando con el "libro completo": las funciones RPC
 `leer_libro()` y `guardar_libro(payload)` arman y desarman el JSON de
@@ -38,7 +39,9 @@ Supabase y agregar una pantalla de acceso.
 
 1. Aplicar el esquema: pegar el contenido de
    `supabase/migrations/20260716120000_esquema_fresquito.sql` en el
-   SQL Editor del panel de Supabase y ejecutarlo (es idempotente).
+   SQL Editor del panel de Supabase y ejecutarlo, y luego lo mismo con
+   `supabase/migrations/20260720120000_activos_proveedores.sql` (en ese
+   orden). Ambos son idempotentes.
 2. Copiar `client/.env.example` a `client/.env` y llenar
    `VITE_SUPABASE_ANON_KEY` (panel de Supabase → Settings → API keys).
 3. Instalar dependencias: `npm run install:all`
