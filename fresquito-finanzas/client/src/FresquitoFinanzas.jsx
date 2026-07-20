@@ -276,10 +276,22 @@ const factorUnidad = (vieja, nueva) => {
   return A_CHICA[vieja] / A_CHICA[nueva];
 };
 
+const UNIDADES_FAMILIA = { masa: ["kg", "g"], volumen: ["L", "ml"] };
+// Unidades entre las que se puede elegir para un insumo/base (misma familia).
+const unidadesCompatibles = (u) => (FAMILIA[u] ? UNIDADES_FAMILIA[FAMILIA[u]] : [u]);
+// Una receta puede pedir un insumo en otra unidad de su familia (ej. leche en
+// ml aunque el inventario esté en L). Esto convierte esa cantidad a la unidad
+// del insumo/base para costear y descontar bien del almacén.
+const factorItem = (itUnidad, refUnidad) => {
+  if (!itUnidad || itUnidad === refUnidad) return 1;
+  const f = factorUnidad(itUnidad, refUnidad);
+  return f === null ? 1 : f;
+};
+
 const costoBaseTeorico = (b, insumos) =>
   b.items.reduce((a, it) => {
     const i = insumos.find((x) => x.id === it.insumoId);
-    return a + (i ? costoUtil(i) * it.cantidad : 0);
+    return a + (i ? costoUtil(i) * it.cantidad * factorItem(it.unidad, i.unidad) : 0);
   }, 0);
 
 const costoUnidadBase = (b, insumos) =>
@@ -289,28 +301,61 @@ const partesReceta = (r, data) =>
   r.items.map((it, idx) => {
     if (it.tipo === "base") {
       const b = data.bases.find((x) => x.id === it.refId);
-      if (!b) return null;
-      return { nombre: b.nombre, esBase: true, unidad: b.unidad, cantidad: it.cantidad,
-        costo: costoUnidadBase(b, data.insumos) * it.cantidad, color: CELL_COLORS[idx % CELL_COLORS.length] };
+      if (!b) return { nombre: "Base no encontrada", esBase: true, roto: true, unidad: it.unidad || "", cantidad: it.cantidad,
+        costo: 0, color: CELL_COLORS[idx % CELL_COLORS.length] };
+      const factor = factorItem(it.unidad, b.unidad);
+      return { nombre: b.nombre, esBase: true, unidad: it.unidad || b.unidad, cantidad: it.cantidad,
+        costo: costoUnidadBase(b, data.insumos) * it.cantidad * factor, color: CELL_COLORS[idx % CELL_COLORS.length] };
     }
     const i = data.insumos.find((x) => x.id === it.refId);
-    if (!i) return null;
-    return { nombre: i.nombre, esBase: false, unidad: i.unidad, cantidad: it.cantidad, merma: Number(i.merma) || 0,
-      sinCosto: !i.costoProm, costo: costoUtil(i) * it.cantidad, color: CELL_COLORS[idx % CELL_COLORS.length] };
+    if (!i) return { nombre: "Insumo no encontrado", esBase: false, roto: true, unidad: it.unidad || "", cantidad: it.cantidad,
+      costo: 0, color: CELL_COLORS[idx % CELL_COLORS.length] };
+    const factor = factorItem(it.unidad, i.unidad);
+    return { nombre: i.nombre, esBase: false, unidad: it.unidad || i.unidad, cantidad: it.cantidad, merma: Number(i.merma) || 0,
+      sinCosto: !i.costoProm, costo: costoUtil(i) * it.cantidad * factor, color: CELL_COLORS[idx % CELL_COLORS.length] };
   }).filter(Boolean);
 
 const costoReceta = (r, data) => partesReceta(r, data).reduce((a, p) => a + p.costo, 0);
+
+/* ── Producción real ───────────────────────────────────────── */
+const PAQ = "__paq__"; // unidad especial "por paquete" al capturar producción
+// Unidades en las que se puede capturar el consumo real de un insumo/base.
+const unidadesCaptura = (ref, tipo) => {
+  const base = unidadesCompatibles(ref.unidad);
+  if (tipo === "insumo" && ref.porPaquete && Number(ref.unidadesPorPaquete) > 0) return [...base, PAQ];
+  return base;
+};
+// De la unidad base del insumo/base → a la unidad en que se captura.
+const aUnidadCaptura = (qty, ref, unidad) => {
+  if (unidad === PAQ) return ref.unidadesPorPaquete > 0 ? qty / ref.unidadesPorPaquete : 0;
+  return qty * factorItem(ref.unidad, unidad);
+};
+// De lo capturado (en 'unidad') → a la unidad base del insumo/base.
+const aUnidadRef = (val, ref, unidad) => {
+  if (unidad === PAQ) return (Number(val) || 0) * (ref.unidadesPorPaquete || 0);
+  return (Number(val) || 0) * factorItem(unidad, ref.unidad);
+};
+const redondea = (x) => Math.round((Number(x) || 0) * 1000) / 1000;
+// Costo real por pieza según el histórico de producciones (ponderado por piezas).
+const costoRealPieza = (r) => {
+  const p = r.producciones || [];
+  const piezas = p.reduce((a, x) => a + (x.piezas || 0), 0);
+  const costo = p.reduce((a, x) => a + (x.costo || 0), 0);
+  return piezas > 0 ? costo / piezas : 0;
+};
 
 /* Trae datos de versiones anteriores sin perder nada */
 const migrar = (d) => {
   const out = { ...DEFAULTS, ...d, version: 3 };
   out.bases = (out.bases || []).map((b) => ({ stock: 0, costoProm: 0, items: [], ...b }));
-  out.insumos = (out.insumos || []).map((i) => ({ tipo: "Otro", merma: 0, historial: [], ultimoCosto: i.costoProm || 0, ...i }));
+  out.insumos = (out.insumos || []).map((i) => ({ tipo: "Otro", merma: 0, historial: [], ultimoCosto: i.costoProm || 0,
+    porPaquete: false, unidadesPorPaquete: 0, nombrePaquete: "", ...i }));
   out.recetas = (out.recetas || []).map((r) => ({
     ...r,
     stock: r.stock || 0,
     precioMenudeo: r.precioMenudeo ?? r.precioVenta ?? 0,
     precioMayoreo: r.precioMayoreo ?? 0,
+    producciones: r.producciones || [],
     items: (r.items || []).map((it) => (it.tipo ? it : { tipo: "insumo", refId: it.insumoId, cantidad: it.cantidad })),
   }));
   // Versión muy vieja: gastos e ingresos venían en listas separadas.
@@ -562,7 +607,7 @@ function Panel({ data }) {
 function Movimientos({ data, guardar }) {
   const base = {
     tipo: "gasto", fecha: hoy(), monto: "", categoria: "Insumos", lugar: "",
-    canal: "Evento / carrito", notas: "", insumoId: "", cantidad: "", mayoreo: false,
+    canal: "Evento / carrito", notas: "", insumoId: "", cantidad: "", mayoreo: false, porPaquete: false,
     recurrente: false, recetaId: "", piezas: "", capturadoPor: data.ajustes.usuario || "",
   };
   const [f, setF] = useState(base);
@@ -579,7 +624,11 @@ function Movimientos({ data, guardar }) {
 
   const agregar = () => {
     if (!f.monto || Number(f.monto) <= 0) return;
-    const mov = { ...f, id: uid(), monto: Number(f.monto), cantidad: Number(f.cantidad) || 0, piezas: Number(f.piezas) || 0 };
+    const insumoComprado = data.insumos.find((i) => i.id === f.insumoId);
+    const usaPaq = f.porPaquete && insumoComprado?.porPaquete && Number(insumoComprado.unidadesPorPaquete) > 0;
+    const cantidadReal = usaPaq ? (Number(f.cantidad) || 0) * insumoComprado.unidadesPorPaquete : (Number(f.cantidad) || 0);
+    const mov = { ...f, id: uid(), monto: Number(f.monto), cantidad: cantidadReal, piezas: Number(f.piezas) || 0,
+      paquetes: usaPaq ? Number(f.cantidad) || 0 : 0 };
     let insumos = data.insumos;
     let recetas = data.recetas;
 
@@ -609,6 +658,8 @@ function Movimientos({ data, guardar }) {
   const lista = data.movimientos.filter((m) => filtro === "todos" || m.tipo === filtro);
   const esGasto = f.tipo === "gasto";
   const insumoSel = data.insumos.find((i) => i.id === f.insumoId);
+  const usaPaquete = f.porPaquete && insumoSel?.porPaquete && Number(insumoSel.unidadesPorPaquete) > 0;
+  const cantidadReal = usaPaquete ? (Number(f.cantidad) || 0) * insumoSel.unidadesPorPaquete : (Number(f.cantidad) || 0);
 
   return (
     <div className="fq-grid">
@@ -649,19 +700,26 @@ function Movimientos({ data, guardar }) {
                   {data.insumos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
                 </select>
               </Campo>
-              <Campo label="Cantidad como la compraste">
+              <Campo label={usaPaquete ? `${insumoSel.nombrePaquete || "Paquetes"} comprados` : "Cantidad como la compraste"}>
                 <input type="number" inputMode="decimal" className="fq-in" placeholder="0" value={f.cantidad} onChange={c("cantidad")} />
               </Campo>
             </div>
+            {insumoSel?.porPaquete && Number(insumoSel.unidadesPorPaquete) > 0 && (
+              <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 9, fontSize: 13 }}>
+                <input type="checkbox" checked={f.porPaquete} onChange={(e) => setF({ ...f, porPaquete: e.target.checked })} />
+                Comprar por {insumoSel.nombrePaquete || "paquete"} ({num(insumoSel.unidadesPorPaquete)} {insumoSel.unidad} c/u)
+              </label>
+            )}
             <label style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 9, fontSize: 13 }}>
               <input type="checkbox" checked={f.mayoreo} onChange={(e) => setF({ ...f, mayoreo: e.target.checked })} />
               Fue compra de mayoreo
             </label>
-            {insumoSel && Number(f.cantidad) > 0 && Number(f.monto) > 0 && (
+            {insumoSel && cantidadReal > 0 && Number(f.monto) > 0 && (
               <div className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 8, lineHeight: 1.5 }}>
-                {mxn(Number(f.monto) / Number(f.cantidad))} por {insumoSel.unidad}
+                {usaPaquete && `${num(cantidadReal)} ${insumoSel.unidad} en total · `}
+                {mxn(Number(f.monto) / cantidadReal)} por {insumoSel.unidad}
                 {insumoSel.costoProm > 0 && ` · tu promedio va en ${mxn(insumoSel.costoProm)}`}
-                {Number(insumoSel.merma) > 0 && ` · ya limpio ${mxn((Number(f.monto) / Number(f.cantidad)) / (1 - insumoSel.merma / 100))}`}
+                {Number(insumoSel.merma) > 0 && ` · ya limpio ${mxn((Number(f.monto) / cantidadReal) / (1 - insumoSel.merma / 100))}`}
               </div>
             )}
           </div>
@@ -756,7 +814,8 @@ function Movimientos({ data, guardar }) {
 
 /* ── Insumos ───────────────────────────────────────────────── */
 function Insumos({ data, set }) {
-  const vacio = { nombre: "", tipo: "Fruta", unidad: "kg", merma: "", stock: "", costoProm: "", lugar: "", stockMin: "", notas: "" };
+  const vacio = { nombre: "", tipo: "Fruta", unidad: "kg", merma: "", stock: "", costoProm: "", lugar: "", stockMin: "", notas: "",
+    porPaquete: false, unidadesPorPaquete: "", nombrePaquete: "" };
   const [f, setF] = useState(vacio);
   const [abierto, setAbierto] = useState(false);
   const [sel, setSel] = useState(null);
@@ -771,14 +830,16 @@ function Insumos({ data, set }) {
         ...f, id: uid(), nombre: f.nombre.trim(), merma: Number(f.merma) || 0,
         stock: Number(f.stock) || 0, costoProm: Number(f.costoProm) || 0, ultimoCosto: Number(f.costoProm) || 0,
         precioUnit: 0, precioMayoreo: 0, stockMin: Number(f.stockMin) || 0, historial: [],
+        porPaquete: !!f.porPaquete, unidadesPorPaquete: Number(f.unidadesPorPaquete) || 0, nombrePaquete: f.nombrePaquete.trim(),
       }],
     });
     setF(vacio); setAbierto(false);
   };
 
   const ajustar = (id, d) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, stock: Math.max(0, i.stock + d) } : i)) });
-  const TEXTO = ["nombre", "lugar", "notas", "tipo"];
+  const TEXTO = ["nombre", "lugar", "notas", "tipo", "nombrePaquete"];
   const editar = (id, k, v) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, [k]: TEXTO.includes(k) ? v : Number(v) || 0 } : i)) });
+  const editarPatch = (id, patch) => set({ insumos: data.insumos.map((i) => (i.id === id ? { ...i, ...patch } : i)) });
   const borrar = (id) => set({ insumos: data.insumos.filter((i) => i.id !== id) });
 
   // Cambiar de kg a g (o de L a ml) convierte existencia, precio, historial
@@ -792,15 +853,18 @@ function Insumos({ data, set }) {
       ...i, unidad: nueva,
       stock: i.stock * f,
       stockMin: (i.stockMin || 0) * f,
+      unidadesPorPaquete: (i.unidadesPorPaquete || 0) * f,
       costoProm: (i.costoProm || 0) / f,
       ultimoCosto: (i.ultimoCosto || 0) / f,
       historial: (i.historial || []).map((h) => ({ ...h, costo: h.costo / f })),
     }));
+    // Solo se convierten los ítems que heredan la unidad del insumo. Los que
+    // ya tienen su propia unidad (ej. "250 ml") son independientes.
     const recetas = data.recetas.map((r) => ({
-      ...r, items: r.items.map((it) => (it.tipo === "insumo" && it.refId === id ? { ...it, cantidad: it.cantidad * f } : it)),
+      ...r, items: r.items.map((it) => (it.tipo === "insumo" && it.refId === id && !it.unidad ? { ...it, cantidad: it.cantidad * f } : it)),
     }));
     const bases = data.bases.map((b) => ({
-      ...b, items: b.items.map((it) => (it.insumoId === id ? { ...it, cantidad: it.cantidad * f } : it)),
+      ...b, items: b.items.map((it) => (it.insumoId === id && !it.unidad ? { ...it, cantidad: it.cantidad * f } : it)),
     }));
     set({ insumos, recetas, bases });
   };
@@ -839,6 +903,22 @@ function Insumos({ data, set }) {
             <Campo label="Costo por unidad"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.costoProm} onChange={c("costoProm")} /></Campo>
             <Campo label="Dónde se compra"><input className="fq-in" placeholder="Proveedor o lugar" value={f.lugar} onChange={c("lugar")} /></Campo>
             <Campo label="Mínimo para avisar"><input type="number" inputMode="decimal" className="fq-in" placeholder="0" value={f.stockMin} onChange={c("stockMin")} /></Campo>
+          </div>
+          <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13 }}>
+              <input type="checkbox" checked={f.porPaquete} onChange={(e) => setF({ ...f, porPaquete: e.target.checked })} />
+              Se compra por paquete (ej. leche, galletas Oreo)
+            </label>
+            {f.porPaquete && (
+              <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+                <Campo label={`${f.unidad} por paquete`} hint={`Cuántos ${f.unidad} trae un paquete/caja`}>
+                  <input type="number" inputMode="decimal" className="fq-in" placeholder="0" value={f.unidadesPorPaquete} onChange={c("unidadesPorPaquete")} />
+                </Campo>
+                <Campo label="Cómo le llamas" hint="Ej. caja, paquete, rejilla">
+                  <input className="fq-in" placeholder="paquete" value={f.nombrePaquete} onChange={c("nombrePaquete")} />
+                </Campo>
+              </div>
+            )}
           </div>
           {Number(f.merma) > 0 && Number(f.costoProm) > 0 && (
             <div className="fq-num" style={{ fontSize: 12, color: "var(--teal)", marginTop: 10 }}>
@@ -880,7 +960,7 @@ function Insumos({ data, set }) {
                 <button className="fq-btn ghost" style={{ padding: "3px 9px" }} onClick={(e) => { e.stopPropagation(); ajustar(i.id, 1); }}>+</button>
               </div>
             </div>
-            {sel === i.id && <DetalleInsumo i={i} editar={editar} borrar={borrar} cambiarUnidad={cambiarUnidad} />}
+            {sel === i.id && <DetalleInsumo i={i} editar={editar} editarPatch={editarPatch} borrar={borrar} cambiarUnidad={cambiarUnidad} />}
           </div>
         ))}
       </div>
@@ -888,7 +968,7 @@ function Insumos({ data, set }) {
   );
 }
 
-function DetalleInsumo({ i, editar, borrar, cambiarUnidad }) {
+function DetalleInsumo({ i, editar, editarPatch, borrar, cambiarUnidad }) {
   const h = i.historial || [];
   const costos = h.map((x) => x.costo);
   const min = costos.length ? Math.min(...costos) : i.costoProm;
@@ -943,6 +1023,30 @@ function DetalleInsumo({ i, editar, borrar, cambiarUnidad }) {
         <Campo label="Notas"><input className="fq-in" value={i.notas || ""} placeholder="Marca, presentación…" onChange={(e) => editar(i.id, "notas", e.target.value)} /></Campo>
       </div>
 
+      <div style={{ marginTop: 10, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13 }}>
+          <input type="checkbox" checked={!!i.porPaquete} onChange={(e) => editarPatch(i.id, { porPaquete: e.target.checked })} />
+          Se compra por paquete
+        </label>
+        {i.porPaquete && (
+          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <Campo label={`${i.unidad} por paquete`} hint={`Cuántos ${i.unidad} trae un ${i.nombrePaquete || "paquete"}`}>
+              <input type="number" inputMode="decimal" className="fq-in" value={i.unidadesPorPaquete || ""} placeholder="0"
+                onChange={(e) => editar(i.id, "unidadesPorPaquete", e.target.value)} />
+            </Campo>
+            <Campo label="Cómo le llamas">
+              <input className="fq-in" value={i.nombrePaquete || ""} placeholder="paquete"
+                onChange={(e) => editar(i.id, "nombrePaquete", e.target.value)} />
+            </Campo>
+          </div>
+        )}
+        {i.porPaquete && Number(i.unidadesPorPaquete) > 0 && Number(i.costoProm) > 0 && (
+          <div className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 8 }}>
+            Un {i.nombrePaquete || "paquete"} = {num(i.unidadesPorPaquete)} {i.unidad} · te cuesta ~{mxn(i.costoProm * i.unidadesPorPaquete)}
+          </div>
+        )}
+      </div>
+
       {Number(i.merma) > 0 && (
         <div style={{ marginTop: 12 }}>
           <div className="fq-eyebrow" style={{ marginBottom: 5 }}>De cada {i.unidad} que compras</div>
@@ -989,7 +1093,12 @@ function FormBase({ inicial, insumos, onGuardar, onCancelar }) {
   const [f, setF] = useState(inicial);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const addItem = () => setF({ ...f, items: [...f.items, { insumoId: insumos[0]?.id || "", cantidad: 0 }] });
-  const editItem = (idx, k, v) => setF({ ...f, items: f.items.map((it, j) => (j === idx ? { ...it, [k]: k === "cantidad" ? Number(v) || 0 : v } : it)) });
+  const editItem = (idx, k, v) => setF({ ...f, items: f.items.map((it, j) => {
+    if (j !== idx) return it;
+    if (k === "cantidad") return { ...it, cantidad: Number(v) || 0 };
+    if (k === "insumoId") return { ...it, insumoId: v, unidad: undefined }; // otra unidad puede no aplicar
+    return { ...it, [k]: v };
+  }) });
   const quitItem = (idx) => setF({ ...f, items: f.items.filter((_, j) => j !== idx) });
   const teorico = costoBaseTeorico(f, insumos);
 
@@ -1002,16 +1111,26 @@ function FormBase({ inicial, insumos, onGuardar, onCancelar }) {
       </div>
 
       <div className="fq-eyebrow" style={{ margin: "14px 0 7px" }}>Qué lleva un lote (cantidades ya limpias)</div>
-      {f.items.map((it, idx) => (
-        <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-          <select className="fq-in" style={{ flex: 2 }} value={it.insumoId} onChange={(e) => editItem(idx, "insumoId", e.target.value)}>
-            {insumos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
-          </select>
-          <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
-            value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
-          <button className="fq-btn danger" style={{ padding: "0 10px" }} onClick={() => quitItem(idx)}>×</button>
-        </div>
-      ))}
+      {f.items.map((it, idx) => {
+        const ins = insumos.find((x) => x.id === it.insumoId);
+        const units = ins ? unidadesCompatibles(ins.unidad) : [];
+        return (
+          <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <select className="fq-in" style={{ flex: 2 }} value={it.insumoId} onChange={(e) => editItem(idx, "insumoId", e.target.value)}>
+              {insumos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
+            </select>
+            <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
+              value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
+            {units.length > 1 && (
+              <select className="fq-in" style={{ flex: "0 0 64px", padding: "9px 6px" }} value={it.unidad || ins.unidad}
+                onChange={(e) => editItem(idx, "unidad", e.target.value)}>
+                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            )}
+            <button className="fq-btn danger" style={{ padding: "0 10px" }} onClick={() => quitItem(idx)}>×</button>
+          </div>
+        );
+      })}
       <button className="fq-btn ghost" style={{ width: "100%" }} onClick={addItem}>Agregar insumo</button>
 
       {f.items.length > 0 && Number(f.rinde) > 0 && (
@@ -1045,7 +1164,10 @@ function Bases({ data, guardar }) {
   const producir = (b, n) => {
     const cantidad = Number(n) || 1;
     const consumo = {};
-    b.items.forEach((it) => { consumo[it.insumoId] = (consumo[it.insumoId] || 0) + it.cantidad * cantidad; });
+    b.items.forEach((it) => {
+      const i = data.insumos.find((x) => x.id === it.insumoId);
+      consumo[it.insumoId] = (consumo[it.insumoId] || 0) + it.cantidad * factorItem(it.unidad, i?.unidad) * cantidad;
+    });
     const insumos = data.insumos.map((i) => {
       if (!consumo[i.id]) return i;
       const fisico = consumo[i.id] / (1 - Math.min(95, Number(i.merma) || 0) / 100);
@@ -1101,14 +1223,22 @@ function Bases({ data, guardar }) {
             <div style={{ marginTop: 10 }}>
               {b.items.map((it, k) => {
                 const i = data.insumos.find((x) => x.id === it.insumoId);
-                if (!i) return null;
-                const fisico = it.cantidad / (1 - Math.min(95, Number(i.merma) || 0) / 100);
+                if (!i) return (
+                  <div className="fq-row" key={k} style={{ padding: "6px 0" }}>
+                    <span style={{ fontSize: 13, color: "var(--chile)" }}>⚠️ Insumo no encontrado</span>
+                    <span className="fq-num" style={{ fontSize: 12, color: "var(--chile)" }}>
+                      {num(it.cantidad)} {it.unidad || ""} · corrígelo en "Editar"
+                    </span>
+                  </div>
+                );
+                const cantBase = it.cantidad * factorItem(it.unidad, i.unidad);
+                const fisico = cantBase / (1 - Math.min(95, Number(i.merma) || 0) / 100);
                 return (
                   <div className="fq-row" key={k} style={{ padding: "6px 0" }}>
                     <span style={{ fontSize: 13 }}>{i.nombre}</span>
                     <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
-                      {num(it.cantidad)} {i.unidad}
-                      {Number(i.merma) > 0 && ` (compras ${num(fisico)})`} · {mxn(costoUtil(i) * it.cantidad)}
+                      {num(it.cantidad)} {it.unidad || i.unidad}
+                      {Number(i.merma) > 0 && ` (compras ${num(fisico)} ${i.unidad})`} · {mxn(costoUtil(i) * cantBase)}
                     </span>
                   </div>
                 );
@@ -1130,9 +1260,12 @@ function Bases({ data, guardar }) {
 }
 
 /* ── Paletas ───────────────────────────────────────────────── */
-function FormReceta({ inicial, opciones, onGuardar, onCancelar }) {
+function FormReceta({ inicial, opciones, data, onGuardar, onCancelar }) {
   const [f, setF] = useState(inicial);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const refUnidad = (it) => (it.tipo === "base"
+    ? data.bases.find((b) => b.id === it.refId)?.unidad
+    : data.insumos.find((i) => i.id === it.refId)?.unidad);
   const addItem = () => {
     if (!opciones.length) return;
     const [tipo, refId] = opciones[0].v.split(":");
@@ -1141,7 +1274,8 @@ function FormReceta({ inicial, opciones, onGuardar, onCancelar }) {
   const editItem = (idx, campo, v) =>
     setF({ ...f, items: f.items.map((it, j) => {
       if (j !== idx) return it;
-      if (campo === "ref") { const [tipo, refId] = v.split(":"); return { ...it, tipo, refId }; }
+      if (campo === "ref") { const [tipo, refId] = v.split(":"); return { ...it, tipo, refId, unidad: undefined }; }
+      if (campo === "unidad") return { ...it, unidad: v };
       return { ...it, cantidad: Number(v) || 0 };
     }) });
   const quitItem = (idx) => setF({ ...f, items: f.items.filter((_, j) => j !== idx) });
@@ -1158,18 +1292,28 @@ function FormReceta({ inicial, opciones, onGuardar, onCancelar }) {
       </div>
 
       <div className="fq-eyebrow" style={{ margin: "14px 0 7px" }}>Qué lleva una corrida (cantidades ya limpias)</div>
-      {f.items.map((it, idx) => (
-        <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-          <select className="fq-in" style={{ flex: 2 }} value={`${it.tipo}:${it.refId}`} onChange={(e) => editItem(idx, "ref", e.target.value)}>
-            {opciones.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
-          </select>
-          <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
-            value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
-          <button className="fq-btn danger" style={{ padding: "0 10px" }} onClick={() => quitItem(idx)}>×</button>
-        </div>
-      ))}
+      {f.items.map((it, idx) => {
+        const ru = refUnidad(it);
+        const units = ru ? unidadesCompatibles(ru) : [];
+        return (
+          <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            <select className="fq-in" style={{ flex: 2 }} value={`${it.tipo}:${it.refId}`} onChange={(e) => editItem(idx, "ref", e.target.value)}>
+              {opciones.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+            <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
+              value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
+            {units.length > 1 && (
+              <select className="fq-in" style={{ flex: "0 0 64px", padding: "9px 6px" }} value={it.unidad || ru}
+                onChange={(e) => editItem(idx, "unidad", e.target.value)}>
+                {units.map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+            )}
+            <button className="fq-btn danger" style={{ padding: "0 10px" }} onClick={() => quitItem(idx)}>×</button>
+          </div>
+        );
+      })}
       <button className="fq-btn ghost" style={{ width: "100%" }} onClick={addItem}>Agregar base o insumo</button>
-      <div className="fq-hint">Las bases traen el ⬢ enfrente.</div>
+      <div className="fq-hint">Las bases traen el ⬢ enfrente. Puedes elegir la unidad (ej. ml o L) por ingrediente.</div>
       <div style={{ marginTop: 10 }}>
         <Campo label="Notas"><input className="fq-in" placeholder="Proceso, alertas, tips" value={f.notas} onChange={c("notas")} /></Campo>
       </div>
@@ -1205,23 +1349,25 @@ function Paletas({ data, guardar }) {
   };
   const borrar = (id) => { setSel(null); setEditando(null); guardar({ ...data, recetas: data.recetas.filter((r) => r.id !== id) }); };
 
-  const producir = (r, ciclos = 1) => {
+  // Producción con cantidades REALES capturadas. `lineas` trae, por ingrediente,
+  // la cantidad física ya usada (en la unidad base del insumo/base) y su costo real.
+  const producirReal = (r, corridas, lineas) => {
     const consumoIns = {}, consumoBase = {};
-    r.items.forEach((it) => {
-      const dest = it.tipo === "base" ? consumoBase : consumoIns;
-      dest[it.refId] = (dest[it.refId] || 0) + it.cantidad * ciclos;
+    lineas.forEach((l) => {
+      const dest = l.tipo === "base" ? consumoBase : consumoIns;
+      dest[l.refId] = (dest[l.refId] || 0) + l.cant;
     });
-    const insumos = data.insumos.map((i) => {
-      if (!consumoIns[i.id]) return i;
-      const fisico = consumoIns[i.id] / (1 - Math.min(95, Number(i.merma) || 0) / 100);
-      return { ...i, stock: Math.max(0, i.stock - fisico) };
-    });
-    const bases = data.bases.map((b) => (consumoBase[b.id] ? { ...b, stock: Math.max(0, b.stock - consumoBase[b.id]) } : b));
-    const recetas = data.recetas.map((x) => (x.id === r.id ? { ...x, stock: (x.stock || 0) + x.piezas * ciclos } : x));
+    const insumos = data.insumos.map((i) => (consumoIns[i.id] != null ? { ...i, stock: Math.max(0, i.stock - consumoIns[i.id]) } : i));
+    const bases = data.bases.map((b) => (consumoBase[b.id] != null ? { ...b, stock: Math.max(0, b.stock - consumoBase[b.id]) } : b));
+    const costo = lineas.reduce((a, l) => a + (l.costo || 0), 0);
+    const piezas = (r.piezas || 0) * corridas;
+    const prod = { id: uid(), fecha: hoy(), corridas, piezas, costo, costoPieza: piezas > 0 ? costo / piezas : 0 };
+    const recetas = data.recetas.map((x) => (x.id === r.id
+      ? { ...x, stock: (x.stock || 0) + piezas, producciones: [prod, ...(x.producciones || [])].slice(0, 60) }
+      : x));
     guardar({ ...data, insumos, bases, recetas });
   };
 
-  const receta = data.recetas.find((r) => r.id === sel);
   const piezasTotal = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const lista = data.recetas.filter((r) =>
     r.sabor.toLowerCase().includes(busca.toLowerCase()) && (linea === "todas" || r.linea === linea));
@@ -1248,7 +1394,7 @@ function Paletas({ data, guardar }) {
       {opciones.length === 0 && <div className="fq-card fq-empty">Primero registra insumos o carga el catálogo desde Ajustes.</div>}
 
       {editando === "nuevo" ? (
-        <FormReceta inicial={vacio} opciones={opciones} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
+        <FormReceta inicial={vacio} opciones={opciones} data={data} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
       ) : (
         <button className="fq-btn" onClick={() => setEditando("nuevo")} disabled={opciones.length === 0}>Agregar sabor</button>
       )}
@@ -1261,7 +1407,8 @@ function Paletas({ data, guardar }) {
           const porPieza = r.piezas > 0 ? costo / r.piezas : 0;
           const margen = r.precioMenudeo > 0 ? ((r.precioMenudeo - porPieza) / r.precioMenudeo) * 100 : 0;
           return (
-            <div className="fq-row" key={r.id} style={{ cursor: "pointer", background: sel === r.id ? "var(--escarcha)" : "transparent" }}
+            <div key={r.id}>
+            <div className="fq-row" style={{ cursor: "pointer", background: sel === r.id ? "var(--escarcha)" : "transparent" }}
               onClick={() => { setSel(sel === r.id ? null : r.id); setEditando(null); }}>
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
@@ -1284,26 +1431,33 @@ function Paletas({ data, guardar }) {
                   onClick={(e) => { e.stopPropagation(); setSel(r.id); setEditando(r.id); }}>Editar</button>
               </div>
             </div>
+            {sel === r.id && (
+              <div style={{ padding: 8, background: "var(--escarcha)" }}>
+                {editando === r.id ? (
+                  <FormReceta inicial={r} opciones={opciones} data={data} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
+                ) : (
+                  <DetalleReceta r={r} data={data} producir={producirReal} borrar={borrar} onEditar={() => setEditando(r.id)} />
+                )}
+              </div>
+            )}
+            </div>
           );
         })}
       </div>
-
-      {receta && (editando === receta.id ? (
-        <FormReceta inicial={receta} opciones={opciones} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
-      ) : (
-        <DetalleReceta r={receta} data={data} producir={producir} borrar={borrar} onEditar={() => setEditando(receta.id)} />
-      ))}
     </div>
   );
 }
 
 function DetalleReceta({ r, data, producir, borrar, onEditar }) {
-  const [ciclos, setCiclos] = useState("1");
   const partes = partesReceta(r, data).sort((a, b) => b.costo - a.costo);
   const costo = partes.reduce((a, p) => a + p.costo, 0);
   const faltantes = partes.filter((p) => p.sinCosto).length;
+  const rotos = partes.filter((p) => p.roto).length;
   const piezas = r.piezas || 1;
   const porPieza = costo / piezas;
+  const prods = r.producciones || [];
+  const realPieza = costoRealPieza(r);
+  const variacion = porPieza > 0 && realPieza > 0 ? ((realPieza - porPieza) / porPieza) * 100 : 0;
   const fijos = data.ajustes.costosFijosMes || 0;
   const utilMen = r.precioMenudeo - porPieza;
   const utilMay = r.precioMayoreo - porPieza;
@@ -1333,6 +1487,12 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
         Cada paleta del molde, pintada según a qué se le va el dinero.
       </div>
 
+      {rotos > 0 && (
+        <div style={{ fontSize: 12, color: "var(--chile)", marginBottom: 10, lineHeight: 1.4 }}>
+          ⚠️ {rotos} ingrediente{rotos > 1 ? "s" : ""} de esta receta ya no existe{rotos > 1 ? "n" : ""} en tu catálogo de insumos/bases.
+          Corrígelo en "Editar receta" — el costo de abajo NO los está contando.
+        </div>
+      )}
       {faltantes > 0 && (
         <div style={{ fontSize: 12, color: "var(--ambar)", marginBottom: 10, lineHeight: 1.4 }}>
           {faltantes} de estos insumos no tienen precio todavía. El costo de abajo está incompleto.
@@ -1343,13 +1503,13 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
         <div key={k} className="fq-row" style={{ padding: "7px 0" }}>
           <span style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
             <span style={{ width: 9, height: 9, borderRadius: 2, background: p.color }} />
-            {p.esBase ? `⬢ ${p.nombre}` : p.nombre}
+            {p.roto ? "⚠️ " : p.esBase ? "⬢ " : ""}{p.nombre}
             <span className="fq-num" style={{ color: "var(--tinta-40)", fontSize: 11 }}>
               {num(p.cantidad)} {p.unidad}{p.merma > 0 ? " limpio" : ""}
             </span>
           </span>
-          <span className="fq-num" style={{ fontSize: 13, whiteSpace: "nowrap", color: p.sinCosto ? "var(--ambar)" : "var(--tinta)" }}>
-            {p.sinCosto ? "sin precio" : `${mxn(p.costo)} · ${num(costo > 0 ? (p.costo / costo) * 100 : 0, 0)}%`}
+          <span className="fq-num" style={{ fontSize: 13, whiteSpace: "nowrap", color: p.roto ? "var(--chile)" : p.sinCosto ? "var(--ambar)" : "var(--tinta)" }}>
+            {p.roto ? "no encontrado" : p.sinCosto ? "sin precio" : `${mxn(p.costo)} · ${num(costo > 0 ? (p.costo / costo) * 100 : 0, 0)}%`}
           </span>
         </div>
       ))}
@@ -1363,19 +1523,151 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
           color={utilMay > 0 ? "var(--teal)" : "var(--chile)"} sub={r.precioMayoreo > 0 ? `Vendes a ${mxn(r.precioMayoreo)}` : "Captura el precio"} />
       </div>
 
+      {prods.length > 0 && (
+        <div className="fq-grid" style={{ gridTemplateColumns: "repeat(2,1fr)", marginTop: 10 }}>
+          <Metrica eyebrow="Costo real / pieza (prom.)" valor={mxn(realPieza)}
+            color={realPieza <= porPieza ? "var(--teal)" : "var(--chile)"}
+            sub={`${prods.length} producciones · estándar ${mxn(porPieza)}`} />
+          <Metrica eyebrow="Variación vs estándar" valor={`${variacion > 0 ? "+" : ""}${num(variacion, 0)}%`}
+            color={variacion <= 0 ? "var(--teal)" : "var(--chile)"}
+            sub={variacion > 0 ? "Cuesta más de lo planeado" : "Dentro del estándar"} />
+        </div>
+      )}
+
       <div style={{ marginTop: 10 }}>
         <Metrica eyebrow="Punto de equilibrio" valor={equilibrio > 0 ? `${num(equilibrio, 0)} pzas al mes` : "—"}
           sub={fijos > 0 ? "Piezas al menudeo para cubrir tus costos fijos" : "Captura tus costos fijos en Ajustes"} />
       </div>
 
+      <ProducirReceta r={r} data={data} producir={producir} />
+
+      {prods.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div className="fq-eyebrow" style={{ marginBottom: 6 }}>Últimas producciones</div>
+          {prods.slice(0, 6).map((p) => (
+            <div className="fq-row" key={p.id} style={{ padding: "6px 0" }}>
+              <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
+                {p.fecha} · {num(p.corridas, 0)} corr · {num(p.piezas, 0)} pzas
+              </span>
+              <span className="fq-num" style={{ fontSize: 12 }}>{mxn(p.costo)} · {mxn(p.costoPieza)}/pza</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, marginTop: 13 }}>
-        <input type="number" inputMode="numeric" className="fq-in" style={{ flex: 1 }} value={ciclos} onChange={(e) => setCiclos(e.target.value)} />
-        <button className="fq-btn" style={{ flex: 2 }} onClick={() => producir(r, Number(ciclos) || 1)}>Producir corridas</button>
-        <button className="fq-btn ghost" onClick={onEditar}>Editar</button>
-        <button className="fq-btn danger" onClick={() => borrar(r.id)}>×</button>
+        <button className="fq-btn ghost" style={{ flex: 1 }} onClick={onEditar}>Editar receta</button>
+        <button className="fq-btn danger" onClick={() => borrar(r.id)}>Borrar</button>
       </div>
+    </div>
+  );
+}
+
+/* Panel de producción: captura lo REAL usado por ingrediente (kg/g, pzs o
+   paquete) para descontar bien del inventario y sacar el costo real. */
+function ProducirReceta({ r, data, producir }) {
+  const [corridas, setCorridas] = useState("1");
+  const corridasNum = Number(corridas) || 1;
+  const [reales, setReales] = useState({});
+
+  const refDe = (it) => (it.tipo === "base"
+    ? data.bases.find((b) => b.id === it.refId)
+    : data.insumos.find((i) => i.id === it.refId));
+
+  // Cantidad física teórica (en la unidad base del insumo/base) para las corridas.
+  // En insumos sube la cantidad limpia de la receta por la merma estimada.
+  const teoricoBase = (it) => {
+    const ref = refDe(it);
+    if (!ref) return 0;
+    const enUnidad = it.cantidad * factorItem(it.unidad, ref.unidad) * corridasNum;
+    if (it.tipo === "base") return enUnidad;
+    const m = Math.min(95, Number(ref.merma) || 0) / 100;
+    return enUnidad / (1 - m);
+  };
+
+  // Pre-llena lo real con lo teórico al cambiar corridas o de receta.
+  useEffect(() => {
+    setReales((prev) => {
+      const next = {};
+      r.items.forEach((it, idx) => {
+        const ref = refDe(it);
+        const unidad = prev[idx]?.unit || (ref ? ref.unidad : "");
+        const teo = ref ? aUnidadCaptura(teoricoBase(it), ref, unidad) : 0;
+        next[idx] = { unit: unidad, val: teo ? String(redondea(teo)) : "" };
+      });
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [r.id, corridasNum]);
+
+  const setUnidad = (idx, unidad) => {
+    const it = r.items[idx]; const ref = refDe(it);
+    const teo = ref ? aUnidadCaptura(teoricoBase(it), ref, unidad) : 0;
+    setReales((p) => ({ ...p, [idx]: { unit: unidad, val: teo ? String(redondea(teo)) : "" } }));
+  };
+  const setVal = (idx, val) => setReales((p) => ({ ...p, [idx]: { ...(p[idx] || {}), val } }));
+
+  const lineas = r.items.map((it, idx) => {
+    const ref = refDe(it);
+    const st = reales[idx] || {};
+    const unidad = st.unit || (ref ? ref.unidad : "");
+    const fisico = ref ? aUnidadRef(st.val, ref, unidad) : 0;
+    const costo = !ref ? 0 : it.tipo === "base"
+      ? fisico * costoUnidadBase(ref, data.insumos)
+      : fisico * (ref.costoProm || 0);
+    return { idx, it, ref, unidad, fisico, costo };
+  });
+  const costoTotal = lineas.reduce((a, l) => a + l.costo, 0);
+  const piezas = (r.piezas || 0) * corridasNum;
+
+  const confirmar = () => {
+    const payload = lineas.filter((l) => l.ref).map((l) => ({ tipo: l.it.tipo, refId: l.it.refId, cant: l.fisico, costo: l.costo }));
+    producir(r, corridasNum, payload);
+  };
+
+  const nombreUnidad = (ref, u) => (u === PAQ ? (ref.nombrePaquete || "paq") : u);
+
+  return (
+    <div style={{ marginTop: 14, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+      <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Registrar producción · cantidades reales usadas</div>
+      <Campo label="Corridas / ciclos" hint="Cuántas veces hiciste esta receta. Pre-llena lo sugerido abajo.">
+        <input type="number" inputMode="numeric" className="fq-in" value={corridas} onChange={(e) => setCorridas(e.target.value)} />
+      </Campo>
+      <div style={{ marginTop: 10 }}>
+        {lineas.map((l) => {
+          if (!l.ref) return null;
+          const units = unidadesCaptura(l.ref, l.it.tipo);
+          const teo = redondea(aUnidadCaptura(teoricoBase(l.it), l.ref, l.unidad));
+          return (
+            <div key={l.idx} style={{ marginBottom: 9 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ flex: 2, fontSize: 13, minWidth: 0 }}>{l.it.tipo === "base" ? `⬢ ${l.ref.nombre}` : l.ref.nombre}</span>
+                <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="0"
+                  value={reales[l.idx]?.val ?? ""} onChange={(e) => setVal(l.idx, e.target.value)} />
+                {units.length > 1 ? (
+                  <select className="fq-in" style={{ flex: "0 0 78px", padding: "9px 6px" }} value={l.unidad}
+                    onChange={(e) => setUnidad(l.idx, e.target.value)}>
+                    {units.map((u) => <option key={u} value={u}>{nombreUnidad(l.ref, u)}</option>)}
+                  </select>
+                ) : (
+                  <span className="fq-num" style={{ flex: "0 0 78px", fontSize: 12, color: "var(--tinta-40)", textAlign: "center" }}>{l.unidad}</span>
+                )}
+              </div>
+              <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)", marginTop: 2 }}>
+                sugerido {num(teo)} {nombreUnidad(l.ref, l.unidad)}
+                {l.it.tipo === "insumo" && Number(l.ref.merma) > 0 ? ` (receta + merma ${num(l.ref.merma, 0)}%)` : ""}
+                {" · "}{mxn(l.costo)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="fq-num" style={{ fontSize: 13, color: "var(--teal)", marginTop: 6 }}>
+        Costo real {mxn(costoTotal)}{piezas > 0 ? ` · ${mxn(costoTotal / piezas)}/pza` : ""} · salen {num(piezas, 0)} paletas
+      </div>
+      <button className="fq-btn" style={{ width: "100%", marginTop: 10 }} onClick={confirmar}>Registrar producción</button>
       <div style={{ fontSize: 11, color: "var(--tinta-40)", marginTop: 7 }}>
-        Producir descuenta insumos y bases, y mete las paletas al inventario.
+        Descuenta del inventario lo que capturaste aquí (no la receta), guarda el costo real y mete las paletas al stock.
       </div>
     </div>
   );
@@ -1383,6 +1675,40 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
 
 /* ── Gráficas ──────────────────────────────────────────────── */
 function Graficas({ data }) {
+  const [insHist, setInsHist] = useState("");
+
+  // ── Costeo de paletas ──
+  // "De agua" = sin base de leche/crema; "de leche" = usa alguna base (⬢).
+  const costPieza = (r) => (r.piezas > 0 ? costoReceta(r, data) / r.piezas : 0);
+  const esCrema = (r) => r.items.some((it) => it.tipo === "base");
+
+  const conCosto = useMemo(
+    () => data.recetas.filter((r) => r.piezas > 0 && costoReceta(r, data) > 0),
+    [data.recetas, data.insumos, data.bases]
+  );
+  const prom = (arr) => (arr.length ? arr.reduce((a, r) => a + costPieza(r), 0) / arr.length : 0);
+  const agua = conCosto.filter((r) => !esCrema(r));
+  const crema = conCosto.filter((r) => esCrema(r));
+  const promAgua = prom(agua), promCrema = prom(crema), promTodas = prom(conCosto);
+
+  const ranking = useMemo(
+    () => conCosto.map((r) => ({ sabor: r.sabor, costo: costPieza(r), crema: esCrema(r) })).sort((a, b) => b.costo - a.costo),
+    [conCosto]
+  );
+  const masCara = ranking[0], masBarata = ranking[ranking.length - 1];
+  const topCosto = ranking.slice(0, 14);
+
+  const margenData = useMemo(
+    () => conCosto.filter((r) => r.precioMenudeo > 0)
+      .map((r) => ({ sabor: r.sabor, margen: ((r.precioMenudeo - costPieza(r)) / r.precioMenudeo) * 100 }))
+      .sort((a, b) => b.margen - a.margen),
+    [conCosto]
+  );
+
+  const insumosConHist = data.insumos.filter((i) => (i.historial || []).length > 1);
+  const insSelId = insHist || insumosConHist[0]?.id || "";
+  const insSel = data.insumos.find((i) => i.id === insSelId);
+
   const porCategoria = useMemo(() => {
     const m = {};
     data.movimientos.filter((x) => x.tipo === "gasto").forEach((x) => { m[x.categoria] = (m[x.categoria] || 0) + x.monto; });
@@ -1417,11 +1743,80 @@ function Graficas({ data }) {
     return Object.entries(m).map(([sabor, piezas]) => ({ sabor, piezas })).sort((a, b) => b.piezas - a.piezas).slice(0, 12);
   }, [data.movimientos, data.recetas]);
 
-  if (data.movimientos.length === 0)
-    return <div className="fq-card fq-empty">Las gráficas se dibujan solas en cuanto captures movimientos.</div>;
+  const hayMov = data.movimientos.length > 0;
 
   return (
     <div className="fq-grid">
+      {conCosto.length > 0 ? (
+        <>
+          <div className="fq-grid" data-col3 style={{ gridTemplateColumns: "repeat(3,1fr)" }}>
+            <Metrica eyebrow="Costo prom. paletas de agua" valor={mxn(promAgua)} color="var(--teal)" sub={`${agua.length} sabores sin base`} />
+            <Metrica eyebrow="Costo prom. paletas de leche" valor={mxn(promCrema)} color="var(--ambar)" sub={`${crema.length} sabores con base`} />
+            <Metrica eyebrow="Costo prom. todas" valor={mxn(promTodas)} sub={`${conCosto.length} sabores costeados`} />
+          </div>
+
+          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+            <Metrica eyebrow="La que más cuesta" valor={masCara ? masCara.sabor : "—"} color="var(--chile)"
+              sub={masCara ? `${mxn(masCara.costo)} por pieza` : ""} />
+            <Metrica eyebrow="La que menos cuesta" valor={masBarata ? masBarata.sabor : "—"} color="var(--teal)"
+              sub={masBarata ? `${mxn(masBarata.costo)} por pieza` : ""} />
+          </div>
+
+          <Panelito titulo="Costo por pieza de cada sabor (teal = agua · ámbar = leche)">
+            <BarChart data={topCosto}>
+              <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
+              <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
+              <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={48} />
+              <Tooltip formatter={(v) => mxn(v)} />
+              <Bar dataKey="costo" radius={[3, 3, 0, 0]}>
+                {topCosto.map((d, i) => <Cell key={i} fill={d.crema ? "#E0A32E" : "#1FA39C"} />)}
+              </Bar>
+            </BarChart>
+          </Panelito>
+
+          {margenData.length > 0 && (
+            <Panelito titulo="Margen al menudeo por sabor (%)">
+              <BarChart data={margenData}>
+                <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
+                <XAxis dataKey="sabor" tick={{ fontSize: 9, fill: "#8FA6AB" }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={64} />
+                <YAxis tick={{ fontSize: 11, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={44} unit="%" />
+                <Tooltip formatter={(v) => `${num(v, 0)}%`} />
+                <Bar dataKey="margen" radius={[3, 3, 0, 0]}>
+                  {margenData.map((d, i) => <Cell key={i} fill={d.margen >= 50 ? "#1FA39C" : d.margen >= 0 ? "#E0A32E" : "#D0402E"} />)}
+                </Bar>
+              </BarChart>
+            </Panelito>
+          )}
+        </>
+      ) : (
+        <div className="fq-card fq-empty">Carga el catálogo o captura precios de insumos para ver el análisis de costos de tus paletas.</div>
+      )}
+
+      {insumosConHist.length > 0 && (
+        <div className="fq-card" style={{ padding: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="fq-eyebrow">Seguimiento histórico de precios</div>
+            <select className="fq-in" style={{ width: "auto", maxWidth: 220 }} value={insSelId} onChange={(e) => setInsHist(e.target.value)}>
+              {insumosConHist.map((i) => <option key={i.id} value={i.id}>{i.nombre}</option>)}
+            </select>
+          </div>
+          <div style={{ height: 220, marginTop: 10 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={insSel?.historial || []}>
+                <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" vertical={false} />
+                <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: "#8FA6AB" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "#8FA6AB" }} axisLine={false} tickLine={false} width={46} domain={["auto", "auto"]} />
+                <Tooltip formatter={(v) => mxn(v)} />
+                <Line type="monotone" dataKey="costo" stroke="#7A5340" strokeWidth={2} dot={{ r: 2 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="fq-hint">Precio por {insSel?.unidad} en cada compra registrada de {insSel?.nombre}.</div>
+        </div>
+      )}
+
+      {hayMov ? (
+        <>
       <Panelito titulo="A dónde se va el dinero">
         <BarChart data={porCategoria} layout="vertical">
           <CartesianGrid strokeDasharray="2 4" stroke="#D8E2E2" horizontal={false} />
@@ -1470,6 +1865,10 @@ function Graficas({ data }) {
           <Line type="monotone" dataKey="Utilidad" stroke="#0E2A31" strokeWidth={2} strokeDasharray="4 3" dot={false} />
         </LineChart>
       </Panelito>
+        </>
+      ) : (
+        <div className="fq-card fq-empty">Las gráficas de ingresos y gastos se dibujan en cuanto captures movimientos.</div>
+      )}
     </div>
   );
 }
