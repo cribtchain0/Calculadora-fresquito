@@ -2067,6 +2067,11 @@ function Paletas({ data, guardar, pedirBorrar }) {
     guardar({ ...data, insumos, bases, recetas });
   };
 
+  // Corrección manual del stock terminado (ej. una corrida se registró de
+  // más o de menos por error). No toca insumos/bases, solo esta cifra.
+  const ajustarStock = (id, nuevoStock) =>
+    guardar({ ...data, recetas: data.recetas.map((r) => (r.id === id ? { ...r, stock: Math.max(0, Number(nuevoStock) || 0) } : r)) });
+
   const piezasTotal = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const lista = data.recetas.filter((r) =>
     r.sabor.toLowerCase().includes(busca.toLowerCase()) && (linea === "todas" || r.linea === linea));
@@ -2135,7 +2140,7 @@ function Paletas({ data, guardar, pedirBorrar }) {
                 {editando === r.id ? (
                   <FormReceta inicial={r} opciones={opciones} data={data} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
                 ) : (
-                  <DetalleReceta r={r} data={data} producir={producirReal} borrar={borrar} onEditar={() => setEditando(r.id)} />
+                  <DetalleReceta r={r} data={data} producir={producirReal} borrar={borrar} onEditar={() => setEditando(r.id)} onAjustarStock={ajustarStock} />
                 )}
               </div>
             )}
@@ -2147,7 +2152,7 @@ function Paletas({ data, guardar, pedirBorrar }) {
   );
 }
 
-function DetalleReceta({ r, data, producir, borrar, onEditar }) {
+function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) {
   const partes = partesReceta(r, data).sort((a, b) => b.costo - a.costo);
   const costo = partes.reduce((a, p) => a + p.costo, 0);
   const faltantes = partes.filter((p) => p.sinCosto).length;
@@ -2191,6 +2196,11 @@ function DetalleReceta({ r, data, producir, borrar, onEditar }) {
         <button className="fq-btn ghost" style={{ padding: "4px 10px", fontSize: 12, whiteSpace: "nowrap" }} onClick={onEditar}>Editar receta</button>
       </div>
       {r.notas && <div style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 6, lineHeight: 1.45 }}>{r.notas}</div>}
+
+      <div style={{ marginTop: 12, maxWidth: 260 }}>
+        <CampoConfirmado label="Stock en tienda (piezas)" hint="Corrígelo si una corrida se registró de más o de menos por error."
+          valor={r.stock || 0} onConfirmar={(v) => onAjustarStock(r.id, v)} />
+      </div>
 
       <div className="fq-2col" style={{ marginTop: 12 }}>
         <div>
@@ -2557,14 +2567,33 @@ function ActivosPasivos({ data, guardar, pedirBorrar }) {
 }
 
 /* ── Proveedores y puntos de venta ────────────────────────────
-   Módulo de relación y adeudo — no mueve inventario (comprar insumos
-   sigue siendo solo Movimientos). El crédito que solo se acumula
+   Módulo de relación y adeudo — comprar insumos sigue siendo solo
+   Movimientos, y surtir a un punto de venta sigue siendo solo
+   Movimientos → Registrar ingreso. El crédito que solo se acumula
    (compra/entrega) no genera movimiento; los pagos y cobros reales
-   sí, porque ahí sí se movió dinero. */
-function DetalleProveedor({ item, esProveedor, onEditar, onEvento, onBorrar }) {
+   sí, porque ahí sí se movió dinero. Los puntos de venta además
+   tienen su propio inventario (lo que se les surtió), que se vacía
+   aquí cuando se registra que ya se vendió. */
+function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVenta, onBorrar }) {
   const [monto, setMonto] = useState("");
   const [notas, setNotas] = useState("");
+  const [ventaPiezas, setVentaPiezas] = useState({});
   const eventos = item.eventos || [];
+
+  const inventarioLineas = !esProveedor
+    ? Object.entries(item.inventario || {})
+        .map(([recetaId, cant]) => ({ recetaId, disponible: Number(cant) || 0, receta: (recetas || []).find((r) => r.id === recetaId) }))
+        .filter((l) => l.disponible > 0 && l.receta)
+    : [];
+
+  const vender = (cobrar) => {
+    const lineas = inventarioLineas
+      .map((l) => ({ recetaId: l.recetaId, piezas: Number(ventaPiezas[l.recetaId]) || 0 }))
+      .filter((l) => l.piezas > 0);
+    if (!lineas.length) return;
+    onVenta({ lineas, cobrar });
+    setVentaPiezas({});
+  };
 
   const etiquetaAcumula = esProveedor ? "Compra a crédito" : "Entrega a crédito";
   const etiquetaAbono = esProveedor ? "Registrar pago" : "Registrar cobro";
@@ -2616,6 +2645,28 @@ function DetalleProveedor({ item, esProveedor, onEditar, onEvento, onBorrar }) {
           "{etiquetaAcumula}" solo suma al adeudo. "{etiquetaAbono}" lo resta y sí queda registrado en Movimientos.
         </div>
       </div>
+
+      {inventarioLineas.length > 0 && (
+        <div style={{ marginTop: 12, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+          <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Vender del inventario de {item.nombre}</div>
+          {inventarioLineas.map((l) => (
+            <div key={l.recetaId} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+              <span style={{ flex: 2, fontSize: 13 }}>{l.receta.sabor}</span>
+              <span className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)", whiteSpace: "nowrap" }}>{num(l.disponible, 0)} ahí</span>
+              <input type="number" inputMode="numeric" className="fq-in" style={{ flex: 1 }} placeholder="Vendidas"
+                value={ventaPiezas[l.recetaId] || ""}
+                onChange={(e) => setVentaPiezas({ ...ventaPiezas, [l.recetaId]: e.target.value })} />
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button className="fq-btn ghost" style={{ flex: 1 }} onClick={() => vender(false)}>Se vendió (ya estaba pagado)</button>
+            <button className="fq-btn" style={{ flex: 1 }} onClick={() => vender(true)}>Se vendió y cobré</button>
+          </div>
+          <div className="fq-hint" style={{ marginTop: 8 }}>
+            "Se vendió y cobré" resta del adeudo (a precio de menudeo) y sí queda en Movimientos. "Ya estaba pagado" solo corrige el inventario, para lo que se surtió pagado desde un inicio.
+          </div>
+        </div>
+      )}
 
       {eventos.length > 0 && (
         <div style={{ marginTop: 12 }}>
@@ -2797,6 +2848,51 @@ function Proveedores({ data, guardar, pedirBorrar }) {
     guardar({ ...data, [vista]: nuevaLista, movimientos });
   };
 
+  // Vender lo que ya está en el inventario de un punto de venta: resta esas
+  // piezas del inventario del punto (nunca del stock central, eso ya se
+  // movió cuando se surtió). Si "cobrar" es true, además resta del adeudo
+  // y crea el movimiento de ingreso; si no, es porque ya se había pagado
+  // al surtir y solo se está corrigiendo el inventario.
+  const registrarVenta = (id, { lineas, cobrar }) => {
+    const item = lista.find((x) => x.id === id);
+    if (!item) return;
+    const inventario = { ...(item.inventario || {}) };
+    let totalMonto = 0;
+    const detalle = [];
+    const nuevosMovs = [];
+
+    lineas.forEach((l) => {
+      const disponible = inventario[l.recetaId] || 0;
+      const piezas = Math.min(Number(l.piezas) || 0, disponible);
+      if (piezas <= 0) return;
+      const r = data.recetas.find((x) => x.id === l.recetaId);
+      if (!r) return;
+      inventario[l.recetaId] = Math.max(0, disponible - piezas);
+      const monto = piezas * (r.precioMenudeo || 0);
+      totalMonto += monto;
+      detalle.push(`${r.sabor} x${piezas}`);
+      if (cobrar) {
+        nuevosMovs.push({
+          id: uid(), tipo: "ingreso", fecha: hoy(), monto, categoria: "", canal: "Puntos de venta",
+          lugar: item.nombre, notas: `Venta en ${item.nombre}`, insumoId: "", cantidad: 0, mayoreo: false, porPaquete: false,
+          recurrente: false, recetaId: l.recetaId, piezas, puntoVentaId: item.id, capturadoPor: data.ajustes.usuario || "",
+        });
+      }
+    });
+    if (!detalle.length) return;
+
+    const evento = cobrar ? { id: uid(), fecha: hoy(), tipo: "cobro", monto: totalMonto, notas: detalle.join(", ") } : null;
+    const nuevaLista = lista.map((x) => (x.id === id
+      ? {
+          ...x, inventario,
+          adeudo: cobrar ? Math.max(0, (x.adeudo || 0) - totalMonto) : x.adeudo,
+          eventos: evento ? [evento, ...(x.eventos || [])].slice(0, 60) : x.eventos,
+        }
+      : x));
+
+    guardar({ ...data, [vista]: nuevaLista, movimientos: cobrar ? [...nuevosMovs, ...data.movimientos] : data.movimientos });
+  };
+
   const totalAdeudo = lista.reduce((a, x) => a + (Number(x.adeudo) || 0), 0);
 
   return (
@@ -2848,8 +2944,8 @@ function Proveedores({ data, guardar, pedirBorrar }) {
               </span>
             </div>
             {sel === x.id && (
-              <DetalleProveedor item={x} esProveedor={esProveedor} onEditar={(patch) => editar(x.id, patch)}
-                onEvento={(ev) => registrarEvento(x.id, ev)} onBorrar={() => borrar(x.id)} />
+              <DetalleProveedor item={x} esProveedor={esProveedor} recetas={data.recetas} onEditar={(patch) => editar(x.id, patch)}
+                onEvento={(ev) => registrarEvento(x.id, ev)} onVenta={(v) => registrarVenta(x.id, v)} onBorrar={() => borrar(x.id)} />
             )}
           </div>
         ))}
