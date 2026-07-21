@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, Cell,
@@ -20,7 +20,7 @@ const LINEAS = {
 const CATEGORIAS = ["Insumos", "Empaque", "Transporte", "Renta", "Servicios", "Equipo", "Publicidad", "Eventos", "Proveedores", "Otros"];
 const CANALES = ["Evento / carrito", "Distribución", "Venta directa", "Mayoreo", "Puntos de venta", "Otro"];
 const UNIDADES = ["kg", "g", "L", "ml", "pieza", "paquete"];
-const TIPOS_INSUMO = ["Fruta", "Lácteo", "Abarrote", "Base en polvo", "Empaque", "Otro"];
+const TIPOS_INSUMO = ["Fruta", "Lácteo", "Abarrote", "Base en polvo", "Concentrados y esencias", "Empaque", "Otro"];
 const CELL_COLORS = ["#1FA39C", "#E0A32E", "#D0402E", "#7A5340", "#4C6FA5", "#8E6BA8", "#5B8C3E", "#C2763F"];
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const MERMA_HINT = "Ej. mango ~40%, piña ~45%, maracuyá ~55%, fresa ~5%";
@@ -33,6 +33,7 @@ const TIPO_COLORES = {
   "Lácteo": "#4C6FA5",
   "Abarrote": "#C2763F",
   "Base en polvo": "#7A5340",
+  "Concentrados y esencias": "#B0507A",
   "Empaque": "#8E6BA8",
   "Otro": "#6B7280",
 };
@@ -390,7 +391,8 @@ const migrar = (d) => {
   out.activos = (out.activos || []).map((a) => ({ categoria: "Otro", valor: 0, fecha: hoy(), notas: "", ...a }));
   out.pasivos = (out.pasivos || []).map((p) => ({ categoria: "Otro", monto: 0, fecha: hoy(), notas: "", ...p, fechaLimite: p.fechaLimite || "" }));
   out.proveedores = (out.proveedores || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], ...p }));
-  out.puntosVenta = (out.puntosVenta || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], ...p }));
+  out.puntosVenta = (out.puntosVenta || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], inventario: {}, ...p }));
+  out.movimientos = (out.movimientos || []).map((m) => ({ puntoVentaId: "", ...m }));
   out.recetas = (out.recetas || []).map((r) => ({
     ...r,
     stock: r.stock || 0,
@@ -418,6 +420,7 @@ const NAV_ITEMS = [
   { k: "paletas", l: "Paletas", icono: "paletas", primaria: true },
   { k: "insumos", l: "Insumos", icono: "insumos", primaria: true },
   { k: "bases", l: "Bases", icono: "bases", primaria: false },
+  { k: "inventario", l: "Inventario", icono: "inventario", primaria: false },
   { k: "activos", l: "Activos", icono: "activos", primaria: false },
   { k: "proveedores", l: "Proveedores", icono: "proveedores", primaria: false },
   { k: "graficas", l: "Gráficas", icono: "graficas", primaria: false },
@@ -435,6 +438,7 @@ const Icono = ({ n }) => {
   if (n === "ajustes") return <svg {...p}><path d="M3 6h5.5M12.5 6h4.5M3 10h9.5M16.5 10h.5M3 14h5.5M12.5 14h4.5" /><circle cx="10" cy="6" r="1.6" /><circle cx="14.5" cy="10" r="1.6" /><circle cx="10" cy="14" r="1.6" /></svg>;
   if (n === "activos") return <svg {...p}><path d="M3 10h14" /><rect x="4" y="4" width="4.5" height="6" rx="1" /><rect x="11.5" y="10" width="4.5" height="6" rx="1" /></svg>;
   if (n === "proveedores") return <svg {...p}><path d="M10 17s5.5-5.3 5.5-9.2A5.5 5.5 0 1 0 4.5 7.8C4.5 11.7 10 17 10 17Z" /><circle cx="10" cy="7.6" r="1.8" /></svg>;
+  if (n === "inventario") return <svg {...p}><path d="M2.5 6.2 10 2.5l7.5 3.7-7.5 3.7-7.5-3.7Z" /><path d="M2.5 6.2v7.6L10 17.5l7.5-3.7V6.2M10 9.9v7.6" /></svg>;
   if (n === "mas") return <svg {...p}><circle cx="4" cy="10" r="1.3" /><circle cx="10" cy="10" r="1.3" /><circle cx="16" cy="10" r="1.3" /></svg>;
   return null;
 };
@@ -603,6 +607,44 @@ const CSS = `
 const Campo = ({ label, hint, children }) => (
   <div><span className="fq-lbl">{label}</span>{children}{hint && <div className="fq-hint">{hint}</div>}</div>
 );
+
+// Combobox con búsqueda: mismo look que un <select> pero filtra al
+// escribir. `opciones` es [{v, l}]; se usa donde antes había listas
+// largas de insumos/bases/recetas.
+function SelectorBuscable({ opciones, valor, onChange, placeholder }) {
+  const [abierto, setAbierto] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setAbierto(false); };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const actual = opciones.find((o) => o.v === valor);
+  const filtradas = opciones.filter((o) => o.l.toLowerCase().includes(q.toLowerCase())).slice(0, 50);
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input className="fq-in" placeholder={placeholder || "Buscar…"}
+        value={abierto ? q : (actual?.l || "")}
+        onFocus={() => { setAbierto(true); setQ(""); }}
+        onChange={(e) => { setAbierto(true); setQ(e.target.value); }} />
+      {abierto && (
+        <div className="fq-card" style={{ position: "absolute", zIndex: 30, top: "100%", left: 0, right: 0, marginTop: 4, maxHeight: 240, overflowY: "auto" }}>
+          {filtradas.length === 0 && <div style={{ padding: "10px 12px", fontSize: 13, color: "var(--tinta-40)" }}>Sin resultados</div>}
+          {filtradas.map((o) => (
+            <div key={o.v} className="fq-row" style={{ cursor: "pointer", padding: "8px 12px" }}
+              onClick={() => { onChange(o.v); setAbierto(false); setQ(""); }}>
+              {o.l}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const Metrica = ({ eyebrow, valor, color, sub, logro }) => (
   <div className={"fq-card" + (logro ? " fq-logro" : "")} style={{ padding: "13px 14px" }}>
@@ -801,6 +843,7 @@ export default function FresquitoFinanzas() {
             {vista === "insumos" && <Insumos data={data} set={set} pedirBorrar={pedirBorrar} />}
             {vista === "bases" && <Bases data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "paletas" && <Paletas data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "inventario" && <Inventario data={data} />}
             {vista === "activos" && <ActivosPasivos data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "proveedores" && <Proveedores data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "graficas" && <Graficas data={data} />}
@@ -996,17 +1039,28 @@ function Movimientos({ data, guardar, pedirBorrar }) {
   const base = {
     tipo: "gasto", fecha: hoy(), monto: "", categoria: "Insumos", lugar: "",
     canal: "Evento / carrito", notas: "", insumoId: "", cantidad: "", mayoreo: false, porPaquete: false,
-    recurrente: false, recetaId: "", piezas: "", capturadoPor: data.ajustes.usuario || "",
+    recurrente: false, recetaId: "", piezas: "", puntoVentaId: "", pagadoPV: true, capturadoPor: data.ajustes.usuario || "",
   };
+  const lineaPVVacia = { recetaId: "", piezas: "" };
   const [f, setF] = useState(base);
   const [filtro, setFiltro] = useState("todos");
   const [filtroClicks, setFiltroClicks] = useState(0);
   const [comparar, setComparar] = useState(false);
   const [unlockVisto, setUnlockVisto] = useState(false);
   const [guardadoTick, setGuardadoTick] = useState(0);
+  const [lineasPV, setLineasPV] = useState([lineaPVVacia]);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const receta = data.recetas.find((r) => r.id === f.recetaId);
   const aplicarFiltro = (k) => { setFiltro(k); setFiltroClicks((n) => n + 1); };
+  const esPuntoVenta = f.tipo === "ingreso" && f.canal === "Puntos de venta";
+  const puntoSel = data.puntosVenta.find((p) => p.id === f.puntoVentaId);
+  const editLineaPV = (idx, patch) => setLineasPV(lineasPV.map((l, j) => (j === idx ? { ...l, ...patch } : l)));
+  const quitLineaPV = (idx) => setLineasPV(lineasPV.length > 1 ? lineasPV.filter((_, j) => j !== idx) : [lineaPVVacia]);
+  const totalPV = lineasPV.reduce((a, l) => {
+    const r = data.recetas.find((x) => x.id === l.recetaId);
+    const precio = r ? (f.mayoreo ? r.precioMayoreo : r.precioMenudeo) : 0;
+    return a + (Number(l.piezas) || 0) * precio;
+  }, 0);
 
   // Desbloqueo progresivo: al tercer filtro usado en la sesión aparece,
   // sin interrumpir, una comparación rápida contra el mes pasado.
@@ -1058,6 +1112,58 @@ function Movimientos({ data, guardar, pedirBorrar }) {
     setGuardadoTick((n) => n + 1);
   };
 
+  // Surtir uno o varios sabores a un punto de venta en una sola operación.
+  // El valor se calcula solo (piezas × precio). Si se pagó, se registra
+  // como ingreso normal (uno por sabor, reusa la deducción de stock de
+  // arriba); si es a crédito, no se crea movimiento todavía (igual que
+  // "entrega" en Proveedores) pero el producto sí sale del stock central
+  // y entra al inventario propio del punto de venta.
+  const agregarSurtido = () => {
+    const punto = data.puntosVenta.find((p) => p.id === f.puntoVentaId);
+    const lineas = lineasPV.filter((l) => l.recetaId && Number(l.piezas) > 0);
+    if (!punto || lineas.length === 0) return;
+
+    let recetas = data.recetas;
+    const inventario = { ...(punto.inventario || {}) };
+    const detalle = [];
+    const nuevosMovs = [];
+    let totalMonto = 0;
+
+    lineas.forEach((l) => {
+      const r = recetas.find((x) => x.id === l.recetaId);
+      if (!r) return;
+      const piezas = Number(l.piezas);
+      const precio = f.mayoreo ? r.precioMayoreo : r.precioMenudeo;
+      const monto = piezas * precio;
+      totalMonto += monto;
+      detalle.push(`${r.sabor} x${piezas}`);
+      inventario[l.recetaId] = (inventario[l.recetaId] || 0) + piezas;
+      recetas = recetas.map((x) => (x.id === l.recetaId ? { ...x, stock: Math.max(0, (x.stock || 0) - piezas) } : x));
+      if (f.pagadoPV) {
+        nuevosMovs.push({
+          id: uid(), tipo: "ingreso", fecha: f.fecha, monto, categoria: "", canal: "Puntos de venta",
+          lugar: punto.nombre, notas: f.notas, insumoId: "", cantidad: 0, mayoreo: f.mayoreo, porPaquete: false,
+          recurrente: false, recetaId: l.recetaId, piezas, puntoVentaId: punto.id, capturadoPor: f.capturadoPor,
+        });
+      }
+    });
+
+    let puntosVenta;
+    if (f.pagadoPV) {
+      puntosVenta = data.puntosVenta.map((p) => (p.id === punto.id ? { ...p, inventario } : p));
+    } else {
+      const evento = { id: uid(), fecha: f.fecha, tipo: "entrega", monto: totalMonto, notas: detalle.join(", ") };
+      puntosVenta = data.puntosVenta.map((p) => (p.id === punto.id
+        ? { ...p, inventario, adeudo: (p.adeudo || 0) + totalMonto, eventos: [evento, ...(p.eventos || [])].slice(0, 60) }
+        : p));
+    }
+
+    guardar({ ...data, recetas, puntosVenta, movimientos: [...nuevosMovs, ...data.movimientos] });
+    setF({ ...base, tipo: "ingreso", canal: "Puntos de venta", capturadoPor: f.capturadoPor });
+    setLineasPV([lineaPVVacia]);
+    setGuardadoTick((n) => n + 1);
+  };
+
   const repetir = (m) => setF({ ...base, ...m, fecha: hoy(), monto: String(m.monto), cantidad: m.cantidad ? String(m.cantidad) : "", piezas: m.piezas ? String(m.piezas) : "" });
   const borrar = (id) => pedirBorrar({ ...data, movimientos: data.movimientos.filter((m) => m.id !== id) }, "Movimiento eliminado");
 
@@ -1082,7 +1188,11 @@ function Movimientos({ data, guardar, pedirBorrar }) {
 
         <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
           <Campo label="Fecha"><input type="date" className="fq-in" value={f.fecha} onChange={c("fecha")} /></Campo>
-          <Campo label="Monto (MXN)"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.monto} onChange={c("monto")} /></Campo>
+          {esPuntoVenta ? (
+            <Campo label="Valor total (automático)"><input className="fq-in" value={mxn(totalPV)} disabled style={{ opacity: 0.7 }} /></Campo>
+          ) : (
+            <Campo label="Monto (MXN)"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.monto} onChange={c("monto")} /></Campo>
+          )}
           {esGasto ? (
             <>
               <Campo label="Categoría"><select className="fq-in" value={f.categoria} onChange={c("categoria")}>{CATEGORIAS.map((x) => <option key={x}>{x}</option>)}</select></Campo>
@@ -1091,7 +1201,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           ) : (
             <>
               <Campo label="Canal"><select className="fq-in" value={f.canal} onChange={c("canal")}>{CANALES.map((x) => <option key={x}>{x}</option>)}</select></Campo>
-              <Campo label="Cliente o lugar"><input className="fq-in" placeholder="Ej. Feria del Malecón" value={f.lugar} onChange={c("lugar")} /></Campo>
+              {!esPuntoVenta && <Campo label="Cliente o lugar"><input className="fq-in" placeholder="Ej. Feria del Malecón" value={f.lugar} onChange={c("lugar")} /></Campo>}
             </>
           )}
         </div>
@@ -1101,10 +1211,9 @@ function Movimientos({ data, guardar, pedirBorrar }) {
             <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Ligar a almacén (opcional)</div>
             <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
               <Campo label="Insumo comprado">
-                <select className="fq-in" value={f.insumoId} onChange={c("insumoId")}>
-                  <option value="">— ninguno —</option>
-                  {data.insumos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
-                </select>
+                <SelectorBuscable placeholder="— ninguno —" valor={f.insumoId}
+                  onChange={(v) => setF({ ...f, insumoId: v })}
+                  opciones={[{ v: "", l: "— ninguno —" }, ...data.insumos.map((i) => ({ v: i.id, l: `${i.nombre} (${i.unidad})` }))]} />
               </Campo>
               <Campo label={usaPaquete ? `${insumoSel.nombrePaquete || "Paquetes"} comprados` : "Cantidad como la compraste"}>
                 <input type="number" inputMode="decimal" className="fq-in" placeholder="0" value={f.cantidad} onChange={c("cantidad")} />
@@ -1131,7 +1240,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           </div>
         )}
 
-        {!esGasto && data.recetas.length > 0 && (
+        {!esGasto && !esPuntoVenta && data.recetas.length > 0 && (
           <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
             <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Venta de paletas (opcional)</div>
             <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -1165,6 +1274,78 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           </div>
         )}
 
+        {esPuntoVenta && (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
+            <div className="fq-eyebrow" style={{ marginBottom: 8 }}>¿A quién le surtimos?</div>
+            {data.puntosVenta.length === 0 ? (
+              <div className="fq-hint">Todavía no tienes puntos de venta. Agrega uno en Proveedores → Puntos de venta.</div>
+            ) : (
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
+                {data.puntosVenta.map((p) => (
+                  <button key={p.id} className="fq-chip"
+                    style={f.puntoVentaId === p.id ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)", whiteSpace: "nowrap" } : { whiteSpace: "nowrap" }}
+                    onClick={() => setF({ ...f, puntoVentaId: p.id, lugar: p.nombre })}>
+                    {p.nombre}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {puntoSel && (
+              <>
+                <div className="fq-eyebrow" style={{ margin: "12px 0 7px" }}>Paletas que le llevamos</div>
+                {lineasPV.map((l, idx) => {
+                  const r = data.recetas.find((x) => x.id === l.recetaId);
+                  const precio = r ? (f.mayoreo ? r.precioMayoreo : r.precioMenudeo) : 0;
+                  const subtotal = (Number(l.piezas) || 0) * precio;
+                  return (
+                    <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                      <div style={{ flex: 2 }}>
+                        <SelectorBuscable placeholder="Sabor…" valor={l.recetaId}
+                          onChange={(v) => editLineaPV(idx, { recetaId: v })}
+                          opciones={data.recetas.map((x) => ({ v: x.id, l: `${x.sabor} (${num(x.stock || 0, 0)} en stock)` }))} />
+                      </div>
+                      <input type="number" inputMode="numeric" className="fq-in" style={{ flex: 1 }} placeholder="Piezas"
+                        value={l.piezas} onChange={(e) => editLineaPV(idx, { piezas: e.target.value })} />
+                      <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)", whiteSpace: "nowrap", minWidth: 60, textAlign: "right" }}>
+                        {subtotal > 0 ? mxn(subtotal) : ""}
+                      </span>
+                      <button className="fq-btn danger" style={{ padding: "0 10px" }} onClick={() => quitLineaPV(idx)}>×</button>
+                    </div>
+                  );
+                })}
+                <button className="fq-btn ghost" style={{ width: "100%" }} onClick={() => setLineasPV([...lineasPV, lineaPVVacia])}>Agregar otro sabor</button>
+
+                <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                  {[false, true].map((mm) => (
+                    <button key={String(mm)} className="fq-chip"
+                      style={f.mayoreo === mm ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}
+                      onClick={() => setF({ ...f, mayoreo: mm })}>
+                      {mm ? "Mayoreo" : "Menudeo"}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
+                  {[[true, "Pagado"], [false, "A crédito"]].map(([v, l]) => (
+                    <button key={String(v)} className="fq-chip"
+                      style={f.pagadoPV === v ? { background: v ? "var(--teal)" : "var(--ambar)", color: "#fff", borderColor: "transparent" } : {}}
+                      onClick={() => setF({ ...f, pagadoPV: v })}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+
+                {totalPV > 0 && (
+                  <div className="fq-num" style={{ fontSize: 13, fontWeight: 600, color: "var(--teal)", marginTop: 9 }}>
+                    Total {mxn(totalPV)}{!f.pagadoPV && ` · se suma al adeudo de ${puntoSel.nombre}`}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
         <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 12 }}>
           <Campo label="Notas"><input className="fq-in" placeholder="Detalle libre" value={f.notas} onChange={c("notas")} /></Campo>
           <Campo label="Capturó"><input className="fq-in" placeholder="Tu nombre" value={f.capturadoPor} onChange={c("capturadoPor")} /></Campo>
@@ -1178,8 +1359,9 @@ function Movimientos({ data, guardar, pedirBorrar }) {
         )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13 }}>
-          <button className="fq-btn" style={{ flex: 1 }} onClick={agregar}>
-            Guardar {esGasto ? "gasto" : "ingreso"}
+          <button className="fq-btn" style={{ flex: 1 }} onClick={esPuntoVenta ? agregarSurtido : agregar}
+            disabled={esPuntoVenta && !(puntoSel && lineasPV.some((l) => l.recetaId && Number(l.piezas) > 0))}>
+            Guardar {esGasto ? "gasto" : esPuntoVenta ? "surtido" : "ingreso"}
           </button>
           {guardadoTick > 0 && <span key={guardadoTick} className="fq-confirm">Guardado</span>}
         </div>
@@ -1247,7 +1429,6 @@ function Insumos({ data, set, pedirBorrar }) {
   const [sel, setSel] = useState(null);
   const [busca, setBusca] = useState("");
   const [soloSinPrecio, setSoloSinPrecio] = useState(false);
-  const [orden, setOrden] = useState("alfabetico"); // alfabetico | tipo
   const [tipoFiltro, setTipoFiltro] = useState("todos");
   const [guardadoTick, setGuardadoTick] = useState(0);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -1315,9 +1496,7 @@ function Insumos({ data, set, pedirBorrar }) {
   const lista = data.insumos
     .filter((i) => i.nombre.toLowerCase().includes(busca.toLowerCase()) && (!soloSinPrecio || !i.costoProm)
       && (tipoFiltro === "todos" || i.tipo === tipoFiltro))
-    .sort((a, b) => orden === "tipo"
-      ? (a.tipo || "Otro").localeCompare(b.tipo || "Otro") || a.nombre.localeCompare(b.nombre)
-      : a.nombre.localeCompare(b.nombre));
+    .sort((a, b) => (a.tipo || "Otro").localeCompare(b.tipo || "Otro") || a.nombre.localeCompare(b.nombre));
 
   return (
     <div className="fq-grid">
@@ -1334,20 +1513,12 @@ function Insumos({ data, set, pedirBorrar }) {
       </div>
 
       {data.insumos.length > 0 && (
-        <>
-          <div style={{ display: "flex", gap: 6 }}>
-            {[["alfabetico", "Alfabético"], ["tipo", "Por tipo"]].map(([k, l]) => (
-              <button key={k} className="fq-chip" onClick={() => setOrden(k)}
-                style={orden === k ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}>{l}</button>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
-            {["todos", ...TIPOS_INSUMO].map((t) => (
-              <button key={t} className="fq-chip" onClick={() => setTipoFiltro(t)}
-                style={tipoFiltro === t ? { background: TIPO_COLORES[t] || "var(--tinta)", color: "#fff", borderColor: "transparent" } : {}}>{t}</button>
-            ))}
-          </div>
-        </>
+        <div style={{ display: "flex", gap: 6, overflowX: "auto" }}>
+          {["todos", ...TIPOS_INSUMO].map((t) => (
+            <button key={t} className="fq-chip" onClick={() => setTipoFiltro(t)}
+              style={tipoFiltro === t ? { background: TIPO_COLORES[t] || "var(--tinta)", color: "#fff", borderColor: "transparent" } : {}}>{t}</button>
+          ))}
+        </div>
       )}
 
       <button className="fq-btn" onClick={() => setAbierto(!abierto)}>{abierto ? "Cancelar" : "Agregar insumo"}</button>
@@ -1403,7 +1574,7 @@ function Insumos({ data, set, pedirBorrar }) {
           </div>
         ) : lista.map((i, idx) => (
           <div key={i.id}>
-            {orden === "tipo" && (idx === 0 || (lista[idx - 1].tipo || "Otro") !== (i.tipo || "Otro")) && (
+            {(idx === 0 || (lista[idx - 1].tipo || "Otro") !== (i.tipo || "Otro")) && (
               <div className="fq-eyebrow" style={{ padding: "10px 13px 4px", color: TIPO_COLORES[i.tipo] || TIPO_COLORES.Otro }}>
                 {i.tipo || "Otro"}
               </div>
@@ -1643,9 +1814,10 @@ function FormBase({ inicial, insumos, onGuardar, onCancelar }) {
         const units = ins ? unidadesCompatibles(ins.unidad) : [];
         return (
           <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <select className="fq-in" style={{ flex: 2 }} value={it.insumoId} onChange={(e) => editItem(idx, "insumoId", e.target.value)}>
-              {insumos.map((i) => <option key={i.id} value={i.id}>{i.nombre} ({i.unidad})</option>)}
-            </select>
+            <div style={{ flex: 2 }}>
+              <SelectorBuscable valor={it.insumoId} onChange={(v) => editItem(idx, "insumoId", v)}
+                opciones={insumos.map((i) => ({ v: i.id, l: `${i.nombre} (${i.unidad})` }))} />
+            </div>
             <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
               value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
             {units.length > 1 && (
@@ -1824,9 +1996,9 @@ function FormReceta({ inicial, opciones, data, onGuardar, onCancelar }) {
         const units = ru ? unidadesCompatibles(ru) : [];
         return (
           <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-            <select className="fq-in" style={{ flex: 2 }} value={`${it.tipo}:${it.refId}`} onChange={(e) => editItem(idx, "ref", e.target.value)}>
-              {opciones.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
-            </select>
+            <div style={{ flex: 2 }}>
+              <SelectorBuscable valor={`${it.tipo}:${it.refId}`} onChange={(v) => editItem(idx, "ref", v)} opciones={opciones} />
+            </div>
             <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="Cant."
               value={it.cantidad || ""} onChange={(e) => editItem(idx, "cantidad", e.target.value)} />
             {units.length > 1 && (
@@ -2468,6 +2640,109 @@ function DetalleProveedor({ item, esProveedor, onEditar, onEvento, onBorrar }) {
       )}
 
       <BotonBorrar etiqueta={esProveedor ? "Borrar proveedor" : "Borrar punto de venta"} onBorrar={onBorrar} style={{ width: "100%", marginTop: 12 }} />
+    </div>
+  );
+}
+
+/* ── Inventario: cómo se va produciendo y vendiendo, y lo que ya
+   está en cada punto de venta (aparte del de tienda) ─────────── */
+function Inventario({ data }) {
+  const stockTienda = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
+  const stockPuntos = data.puntosVenta.reduce(
+    (a, p) => a + Object.values(p.inventario || {}).reduce((s, n) => s + (Number(n) || 0), 0), 0);
+
+  const produccion = useMemo(() => {
+    const filas = [];
+    data.recetas.forEach((r) => (r.producciones || []).forEach((p) => filas.push({ ...p, sabor: r.sabor })));
+    return filas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || ""));
+  }, [data.recetas]);
+
+  const ventas = useMemo(() =>
+    data.movimientos
+      .filter((m) => m.tipo === "ingreso" && m.recetaId && m.piezas > 0)
+      .map((m) => ({ ...m, sabor: data.recetas.find((r) => r.id === m.recetaId)?.sabor || "?" })),
+    [data.movimientos, data.recetas]);
+
+  const porSaborTienda = data.recetas.filter((r) => (r.stock || 0) > 0).sort((a, b) => (b.stock || 0) - (a.stock || 0));
+
+  const puntosConInventario = data.puntosVenta
+    .map((p) => ({
+      ...p,
+      lineas: Object.entries(p.inventario || {})
+        .map(([recetaId, cant]) => ({ recetaId, cant: Number(cant) || 0, sabor: data.recetas.find((r) => r.id === recetaId)?.sabor || "?" }))
+        .filter((l) => l.cant > 0),
+    }))
+    .filter((p) => p.lineas.length > 0);
+
+  return (
+    <div className="fq-grid">
+      <div className="fq-metrica-grid">
+        <Metrica eyebrow="En tienda" valor={num(stockTienda, 0)} sub="Listas para vender o surtir" />
+        <Metrica eyebrow="En puntos de venta" valor={num(stockPuntos, 0)} sub="Ya entregadas, sin vender todavía" />
+        <Metrica eyebrow="Total" valor={num(stockTienda + stockPuntos, 0)} />
+      </div>
+
+      <div className="fq-card">
+        <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Stock en tienda por sabor</div>
+        {porSaborTienda.length === 0 ? (
+          <div className="fq-empty">Sin paletas en tienda todavía.</div>
+        ) : porSaborTienda.map((r) => (
+          <div className="fq-row" key={r.id}>
+            <span style={{ fontSize: 14 }}>{r.sabor}</span>
+            <span className="fq-num" style={{ fontWeight: 600, fontSize: 14 }}>{num(r.stock, 0)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="fq-card">
+        <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Stock en puntos de venta</div>
+        <div style={{ padding: "4px 14px 8px", fontSize: 12, color: "var(--tinta-40)" }}>
+          Lo que ya se surtió y no se ha vendido. No se mezcla con el de tienda.
+        </div>
+        {puntosConInventario.length === 0 ? (
+          <div className="fq-empty">Todavía no hay inventario en puntos de venta.</div>
+        ) : puntosConInventario.map((p) => (
+          <div key={p.id} style={{ padding: "8px 14px", borderTop: "1px solid var(--linea)" }}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{p.nombre}</div>
+            {p.lineas.map((l) => (
+              <div className="fq-row" key={l.recetaId} style={{ padding: "3px 0" }}>
+                <span style={{ fontSize: 13, color: "var(--tinta-70)" }}>{l.sabor}</span>
+                <span className="fq-num" style={{ fontSize: 13 }}>{num(l.cant, 0)}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      <div className="fq-card">
+        <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Producción reciente</div>
+        {produccion.length === 0 ? (
+          <div className="fq-empty">Sin producciones registradas todavía.</div>
+        ) : produccion.slice(0, 12).map((p, idx) => (
+          <div className="fq-row" key={p.id || idx}>
+            <div>
+              <span style={{ fontSize: 13 }}>{p.sabor}</span>
+              <span className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)", marginLeft: 6 }}>{p.fecha}</span>
+            </div>
+            <span className="fq-num" style={{ fontSize: 13, color: "var(--teal)" }}>+{num(p.piezas, 0)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="fq-card">
+        <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Ventas recientes</div>
+        {ventas.length === 0 ? (
+          <div className="fq-empty">Sin ventas de paletas registradas todavía.</div>
+        ) : ventas.slice(0, 12).map((m) => (
+          <div className="fq-row" key={m.id}>
+            <div>
+              <span style={{ fontSize: 13 }}>{m.sabor}</span>
+              <span className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)", marginLeft: 6 }}>{m.fecha}{m.lugar ? ` · ${m.lugar}` : ""}</span>
+            </div>
+            <span className="fq-num" style={{ fontSize: 13, color: "var(--chile)" }}>−{num(m.piezas, 0)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
