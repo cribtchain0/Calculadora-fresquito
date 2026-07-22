@@ -843,7 +843,7 @@ export default function FresquitoFinanzas() {
             {vista === "insumos" && <Insumos data={data} set={set} pedirBorrar={pedirBorrar} />}
             {vista === "bases" && <Bases data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "paletas" && <Paletas data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
-            {vista === "inventario" && <Inventario data={data} />}
+            {vista === "inventario" && <Inventario data={data} guardar={guardar} />}
             {vista === "activos" && <ActivosPasivos data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "proveedores" && <Proveedores data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "graficas" && <Graficas data={data} />}
@@ -1049,10 +1049,11 @@ function Movimientos({ data, guardar, pedirBorrar }) {
   const [unlockVisto, setUnlockVisto] = useState(false);
   const [guardadoTick, setGuardadoTick] = useState(0);
   const [lineasPV, setLineasPV] = useState([lineaPVVacia]);
+  const [editandoId, setEditandoId] = useState(null);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const receta = data.recetas.find((r) => r.id === f.recetaId);
   const aplicarFiltro = (k) => { setFiltro(k); setFiltroClicks((n) => n + 1); };
-  const esPuntoVenta = f.tipo === "ingreso" && f.canal === "Puntos de venta";
+  const esPuntoVenta = !editandoId && f.tipo === "ingreso" && f.canal === "Puntos de venta";
   const puntoSel = data.puntosVenta.find((p) => p.id === f.puntoVentaId);
   const editLineaPV = (idx, patch) => setLineasPV(lineasPV.map((l, j) => (j === idx ? { ...l, ...patch } : l)));
   const quitLineaPV = (idx) => setLineasPV(lineasPV.length > 1 ? lineasPV.filter((_, j) => j !== idx) : [lineaPVVacia]);
@@ -1167,6 +1168,25 @@ function Movimientos({ data, guardar, pedirBorrar }) {
   const repetir = (m) => setF({ ...base, ...m, fecha: hoy(), monto: String(m.monto), cantidad: m.cantidad ? String(m.cantidad) : "", piezas: m.piezas ? String(m.piezas) : "" });
   const borrar = (id) => pedirBorrar({ ...data, movimientos: data.movimientos.filter((m) => m.id !== id) }, "Movimiento eliminado");
 
+  // Editar un movimiento ya guardado: corrige los datos del registro
+  // (monto, fecha, categoría/canal, lugar, notas...) sin volver a tocar
+  // insumos/recetas/puntos de venta — esos ya se movieron cuando se
+  // capturó por primera vez. Para corregir cantidades/inventario, se
+  // hace directo en Insumos, Paletas o Puntos de venta.
+  const editarMov = (m) => {
+    setEditandoId(m.id);
+    setF({ ...base, ...m, monto: String(m.monto), cantidad: m.cantidad ? String(m.cantidad) : "", piezas: m.piezas ? String(m.piezas) : "" });
+  };
+  const cancelarEdicion = () => { setEditandoId(null); setF({ ...base, capturadoPor: f.capturadoPor }); };
+  const guardarEdicion = () => {
+    if (!f.monto || Number(f.monto) <= 0) return;
+    const cambios = { ...f, monto: Number(f.monto), cantidad: Number(f.cantidad) || 0, piezas: Number(f.piezas) || 0 };
+    guardar({ ...data, movimientos: data.movimientos.map((m) => (m.id === editandoId ? { ...m, ...cambios, id: m.id } : m)) });
+    setEditandoId(null);
+    setF({ ...base, capturadoPor: f.capturadoPor });
+    setGuardadoTick((n) => n + 1);
+  };
+
   const lista = data.movimientos.filter((m) => filtro === "todos" || m.tipo === filtro);
   const esGasto = f.tipo === "gasto";
   const insumoSel = data.insumos.find((i) => i.id === f.insumoId);
@@ -1206,7 +1226,13 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           )}
         </div>
 
-        {esGasto && data.insumos.length > 0 && (
+        {editandoId && (
+          <div className="fq-hint" style={{ marginTop: 10 }}>
+            Editando un movimiento existente — los cambios no vuelven a mover inventario. Para eso, corrige el insumo, la paleta o el punto de venta directamente.
+          </div>
+        )}
+
+        {!editandoId && esGasto && data.insumos.length > 0 && (
           <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
             <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Ligar a almacén (opcional)</div>
             <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -1240,7 +1266,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           </div>
         )}
 
-        {!esGasto && !esPuntoVenta && data.recetas.length > 0 && (
+        {!editandoId && !esGasto && !esPuntoVenta && data.recetas.length > 0 && (
           <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
             <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Venta de paletas (opcional)</div>
             <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
@@ -1359,10 +1385,11 @@ function Movimientos({ data, guardar, pedirBorrar }) {
         )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 13 }}>
-          <button className="fq-btn" style={{ flex: 1 }} onClick={esPuntoVenta ? agregarSurtido : agregar}
-            disabled={esPuntoVenta && !(puntoSel && lineasPV.some((l) => l.recetaId && Number(l.piezas) > 0))}>
-            Guardar {esGasto ? "gasto" : esPuntoVenta ? "surtido" : "ingreso"}
+          <button className="fq-btn" style={{ flex: 1 }} onClick={editandoId ? guardarEdicion : (esPuntoVenta ? agregarSurtido : agregar)}
+            disabled={!editandoId && esPuntoVenta && !(puntoSel && lineasPV.some((l) => l.recetaId && Number(l.piezas) > 0))}>
+            {editandoId ? "Guardar cambios" : `Guardar ${esGasto ? "gasto" : esPuntoVenta ? "surtido" : "ingreso"}`}
           </button>
+          {editandoId && <button className="fq-btn ghost" style={{ flex: 1 }} onClick={cancelarEdicion}>Cancelar</button>}
           {guardadoTick > 0 && <span key={guardadoTick} className="fq-confirm">Guardado</span>}
         </div>
       </div>
@@ -1394,7 +1421,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
         {lista.length === 0 ? (
           <div className="fq-empty">Todavía no hay movimientos. Captura tu primer gasto o ingreso arriba.</div>
         ) : lista.slice(0, 100).map((m) => (
-          <div className="fq-row" key={m.id}>
+          <div className="fq-row" key={m.id} style={m.id === editandoId ? { background: "var(--escarcha)" } : {}}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                 {m.lugar || (m.tipo === "gasto" ? m.categoria : m.canal)}
@@ -1410,6 +1437,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
               <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", color: m.tipo === "ingreso" ? "var(--teal)" : "var(--chile)" }}>
                 {m.tipo === "ingreso" ? "+" : "−"}{mxn(m.monto)}
               </span>
+              <button className="fq-btn ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => editarMov(m)}>Editar</button>
               <button className="fq-btn ghost" style={{ padding: "3px 8px", fontSize: 12 }} onClick={() => repetir(m)}>Repetir</button>
               <BotonBorrar chico etiqueta="×" onBorrar={() => borrar(m.id)} />
             </div>
@@ -2071,6 +2099,10 @@ function Paletas({ data, guardar, pedirBorrar }) {
   // más o de menos por error). No toca insumos/bases, solo esta cifra.
   const ajustarStock = (id, nuevoStock) =>
     guardar({ ...data, recetas: data.recetas.map((r) => (r.id === id ? { ...r, stock: Math.max(0, Number(nuevoStock) || 0) } : r)) });
+  const ajustarStockDelta = (id, d) => {
+    const r = data.recetas.find((x) => x.id === id);
+    ajustarStock(id, (r?.stock || 0) + d);
+  };
 
   const piezasTotal = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const lista = data.recetas.filter((r) =>
@@ -2118,7 +2150,11 @@ function Paletas({ data, guardar, pedirBorrar }) {
                 <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                   <span style={{ width: 8, height: 8, borderRadius: 8, background: LINEAS[r.linea] }} />
                   {r.sabor}
-                  {(r.stock || 0) > 0 && <span className="fq-chip">{num(r.stock, 0)} en stock</span>}
+                  <span style={{ display: "flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                    <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarStockDelta(r.id, -1)}>−</button>
+                    <span className="fq-chip">{num(r.stock || 0, 0)} en stock</span>
+                    <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarStockDelta(r.id, 1)}>+</button>
+                  </span>
                 </div>
                 <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)" }}>
                   {num(r.piezas, 0)} pzas · {num(r.litros, 1)} L · {num(r.piezas / (r.litros || 1), 2)} pzas/L
@@ -2697,7 +2733,14 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
 
 /* ── Inventario: cómo se va produciendo y vendiendo, y lo que ya
    está en cada punto de venta (aparte del de tienda) ─────────── */
-function Inventario({ data }) {
+function Inventario({ data, guardar }) {
+  const ajustarTienda = (recetaId, d) =>
+    guardar({ ...data, recetas: data.recetas.map((r) => (r.id === recetaId ? { ...r, stock: Math.max(0, (r.stock || 0) + d) } : r)) });
+  const ajustarPunto = (puntoId, recetaId, d) =>
+    guardar({ ...data, puntosVenta: data.puntosVenta.map((p) => (p.id === puntoId
+      ? { ...p, inventario: { ...(p.inventario || {}), [recetaId]: Math.max(0, (Number(p.inventario?.[recetaId]) || 0) + d) } }
+      : p)) });
+
   const stockTienda = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const stockPuntos = data.puntosVenta.reduce(
     (a, p) => a + Object.values(p.inventario || {}).reduce((s, n) => s + (Number(n) || 0), 0), 0);
@@ -2740,7 +2783,11 @@ function Inventario({ data }) {
         ) : porSaborTienda.map((r) => (
           <div className="fq-row" key={r.id}>
             <span style={{ fontSize: 14 }}>{r.sabor}</span>
-            <span className="fq-num" style={{ fontWeight: 600, fontSize: 14 }}>{num(r.stock, 0)}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="fq-btn ghost" style={{ padding: "2px 9px" }} onClick={() => ajustarTienda(r.id, -1)}>−</button>
+              <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, minWidth: 28, textAlign: "center" }}>{num(r.stock, 0)}</span>
+              <button className="fq-btn ghost" style={{ padding: "2px 9px" }} onClick={() => ajustarTienda(r.id, 1)}>+</button>
+            </div>
           </div>
         ))}
       </div>
@@ -2758,7 +2805,11 @@ function Inventario({ data }) {
             {p.lineas.map((l) => (
               <div className="fq-row" key={l.recetaId} style={{ padding: "3px 0" }}>
                 <span style={{ fontSize: 13, color: "var(--tinta-70)" }}>{l.sabor}</span>
-                <span className="fq-num" style={{ fontSize: 13 }}>{num(l.cant, 0)}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarPunto(p.id, l.recetaId, -1)}>−</button>
+                  <span className="fq-num" style={{ fontSize: 13, minWidth: 24, textAlign: "center" }}>{num(l.cant, 0)}</span>
+                  <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarPunto(p.id, l.recetaId, 1)}>+</button>
+                </div>
               </div>
             ))}
           </div>
