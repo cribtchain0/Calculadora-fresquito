@@ -701,6 +701,40 @@ function CampoConfirmado({ label, hint, valor, onConfirmar }) {
   );
 }
 
+// Cantidad que se ve como texto y se vuelve un input al hacer clic, para
+// teclear la cifra exacta en vez de darle al +/- varias veces.
+function NumeroEditable({ valor, onCambiar, fontSize = 14, minWidth = 28 }) {
+  const [editando, setEditando] = useState(false);
+  const [draft, setDraft] = useState(String(valor ?? 0));
+  const inputRef = React.useRef(null);
+
+  useEffect(() => { if (editando) inputRef.current?.select(); }, [editando]);
+
+  const confirmar = () => {
+    const n = Math.max(0, Number(draft) || 0);
+    if (n !== Number(valor || 0)) onCambiar(n);
+    setEditando(false);
+  };
+
+  if (editando) {
+    return (
+      <input ref={inputRef} type="number" inputMode="decimal" className="fq-in" autoFocus
+        value={draft} onChange={(e) => setDraft(e.target.value)}
+        onBlur={confirmar}
+        onKeyDown={(e) => { if (e.key === "Enter") confirmar(); if (e.key === "Escape") setEditando(false); }}
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 56, padding: "2px 6px", fontSize, textAlign: "center" }} />
+    );
+  }
+  return (
+    <span className="fq-num" title="Clic para editar la cantidad"
+      style={{ fontWeight: 600, fontSize, minWidth, textAlign: "center", cursor: "pointer", borderBottom: "1px dashed var(--tinta-40)" }}
+      onClick={(e) => { e.stopPropagation(); setDraft(String(valor ?? 0)); setEditando(true); }}>
+      {num(valor, 0)}
+    </span>
+  );
+}
+
 /* ── App ───────────────────────────────────────────────────── */
 export default function FresquitoFinanzas() {
   const [data, setData] = useState(DEFAULTS);
@@ -2152,7 +2186,9 @@ function Paletas({ data, guardar, pedirBorrar }) {
                   {r.sabor}
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
                     <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarStockDelta(r.id, -1)}>−</button>
-                    <span className="fq-chip">{num(r.stock || 0, 0)} en stock</span>
+                    <span className="fq-chip" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <NumeroEditable valor={r.stock || 0} onCambiar={(v) => ajustarStock(r.id, v)} fontSize={12} minWidth={18} /> en stock
+                    </span>
                     <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarStockDelta(r.id, 1)}>+</button>
                   </span>
                 </div>
@@ -2740,6 +2776,12 @@ function Inventario({ data, guardar }) {
     guardar({ ...data, puntosVenta: data.puntosVenta.map((p) => (p.id === puntoId
       ? { ...p, inventario: { ...(p.inventario || {}), [recetaId]: Math.max(0, (Number(p.inventario?.[recetaId]) || 0) + d) } }
       : p)) });
+  const setTienda = (recetaId, valor) =>
+    guardar({ ...data, recetas: data.recetas.map((r) => (r.id === recetaId ? { ...r, stock: Math.max(0, Number(valor) || 0) } : r)) });
+  const setPunto = (puntoId, recetaId, valor) =>
+    guardar({ ...data, puntosVenta: data.puntosVenta.map((p) => (p.id === puntoId
+      ? { ...p, inventario: { ...(p.inventario || {}), [recetaId]: Math.max(0, Number(valor) || 0) } }
+      : p)) });
 
   const stockTienda = data.recetas.reduce((a, r) => a + (r.stock || 0), 0);
   const stockPuntos = data.puntosVenta.reduce(
@@ -2785,7 +2827,7 @@ function Inventario({ data, guardar }) {
             <span style={{ fontSize: 14 }}>{r.sabor}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <button className="fq-btn ghost" style={{ padding: "2px 9px" }} onClick={() => ajustarTienda(r.id, -1)}>−</button>
-              <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, minWidth: 28, textAlign: "center" }}>{num(r.stock, 0)}</span>
+              <NumeroEditable valor={r.stock} onCambiar={(v) => setTienda(r.id, v)} />
               <button className="fq-btn ghost" style={{ padding: "2px 9px" }} onClick={() => ajustarTienda(r.id, 1)}>+</button>
             </div>
           </div>
@@ -2807,7 +2849,7 @@ function Inventario({ data, guardar }) {
                 <span style={{ fontSize: 13, color: "var(--tinta-70)" }}>{l.sabor}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarPunto(p.id, l.recetaId, -1)}>−</button>
-                  <span className="fq-num" style={{ fontSize: 13, minWidth: 24, textAlign: "center" }}>{num(l.cant, 0)}</span>
+                  <NumeroEditable valor={l.cant} onCambiar={(v) => setPunto(p.id, l.recetaId, v)} fontSize={13} minWidth={24} />
                   <button className="fq-btn ghost" style={{ padding: "1px 8px", fontSize: 12 }} onClick={() => ajustarPunto(p.id, l.recetaId, 1)}>+</button>
                 </div>
               </div>
