@@ -20,7 +20,7 @@ const LINEAS = {
 const CATEGORIAS = ["Insumos", "Empaque", "Transporte", "Renta", "Servicios", "Equipo", "Publicidad", "Eventos", "Proveedores", "Otros"];
 const CANALES = ["Evento / carrito", "Distribución", "Venta directa", "Mayoreo", "Puntos de venta", "Otro"];
 const UNIDADES = ["kg", "g", "L", "ml", "pieza", "paquete"];
-const TIPOS_INSUMO = ["Fruta", "Lácteo", "Abarrote", "Base en polvo", "Concentrados y esencias", "Empaque", "Otro"];
+const TIPOS_INSUMO = ["Fruta", "Fruta congelada", "Lácteo", "Abarrote", "Base en polvo", "Concentrados y esencias", "Empaque", "Otro"];
 const CELL_COLORS = ["#1FA39C", "#E0A32E", "#D0402E", "#7A5340", "#4C6FA5", "#8E6BA8", "#5B8C3E", "#C2763F"];
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 const MERMA_HINT = "Ej. mango ~40%, piña ~45%, maracuyá ~55%, fresa ~5%";
@@ -30,6 +30,7 @@ const MERMA_HINT = "Ej. mango ~40%, piña ~45%, maracuyá ~55%, fresa ~5%";
 // negativo en el resto de la app (ver regla de gamificación más abajo).
 const TIPO_COLORES = {
   "Fruta": "#5B8C3E",
+  "Fruta congelada": "#2E8FB0",
   "Lácteo": "#4C6FA5",
   "Abarrote": "#C2763F",
   "Base en polvo": "#7A5340",
@@ -50,7 +51,6 @@ const DEFAULTS = {
   ajustes: { moldePiezas: 40, ciclosLitros: 4.8, costosFijosMes: 0, usuario: "" },
   activos: [],
   pasivos: [],
-  proveedores: [],
   puntosVenta: [],
 };
 
@@ -364,8 +364,8 @@ const aUnidadRef = (val, ref, unidad) => {
 };
 const redondea = (x) => Math.round((Number(x) || 0) * 1000) / 1000;
 // Costo real por pieza según el histórico de producciones (ponderado por piezas).
-const costoRealPieza = (r) => {
-  const p = r.producciones || [];
+const costoRealPieza = (r, n = Infinity) => {
+  const p = (r.producciones || []).slice(0, n);
   const piezas = p.reduce((a, x) => a + (x.piezas || 0), 0);
   const costo = p.reduce((a, x) => a + (x.costo || 0), 0);
   return piezas > 0 ? costo / piezas : 0;
@@ -387,11 +387,11 @@ const migrar = (d) => {
   const out = { ...DEFAULTS, ...d, version: 3 };
   out.bases = (out.bases || []).map((b) => ({ stock: 0, costoProm: 0, items: [], ...b }));
   out.insumos = (out.insumos || []).map((i) => ({ tipo: "Otro", merma: 0, historial: [], ultimoCosto: i.costoProm || 0,
-    porPaquete: false, unidadesPorPaquete: 0, nombrePaquete: "", mermas: [], ...i }));
+    porPaquete: false, unidadesPorPaquete: 0, nombrePaquete: "", mermas: [], congeladoId: "", ...i }));
   out.activos = (out.activos || []).map((a) => ({ categoria: "Otro", valor: 0, fecha: hoy(), notas: "", ...a }));
   out.pasivos = (out.pasivos || []).map((p) => ({ categoria: "Otro", monto: 0, fecha: hoy(), notas: "", ...p, fechaLimite: p.fechaLimite || "" }));
-  out.proveedores = (out.proveedores || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], ...p }));
-  out.puntosVenta = (out.puntosVenta || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], inventario: {}, ...p }));
+  out.puntosVenta = (out.puntosVenta || []).map((p) => ({ ubicacion: "", adeudo: 0, notas: "", eventos: [], inventario: {},
+    contacto: "", telefono: "", ubicacionLink: "", fechaAlta: hoy(), ...p }));
   out.movimientos = (out.movimientos || []).map((m) => ({ puntoVentaId: "", ...m }));
   out.recetas = (out.recetas || []).map((r) => ({
     ...r,
@@ -422,7 +422,7 @@ const NAV_ITEMS = [
   { k: "bases", l: "Bases", icono: "bases", primaria: false },
   { k: "inventario", l: "Inventario", icono: "inventario", primaria: false },
   { k: "activos", l: "Activos", icono: "activos", primaria: false },
-  { k: "proveedores", l: "Proveedores", icono: "proveedores", primaria: false },
+  { k: "puntosVenta", l: "Puntos de venta", icono: "puntosVenta", primaria: false },
   { k: "graficas", l: "Gráficas", icono: "graficas", primaria: false },
   { k: "ajustes", l: "Ajustes", icono: "ajustes", primaria: false },
 ];
@@ -437,7 +437,7 @@ const Icono = ({ n }) => {
   if (n === "graficas") return <svg {...p}><rect x="3" y="11" width="3.4" height="6" rx="1" /><rect x="8.3" y="6.5" width="3.4" height="10.5" rx="1" /><rect x="13.6" y="3" width="3.4" height="14" rx="1" /></svg>;
   if (n === "ajustes") return <svg {...p}><path d="M3 6h5.5M12.5 6h4.5M3 10h9.5M16.5 10h.5M3 14h5.5M12.5 14h4.5" /><circle cx="10" cy="6" r="1.6" /><circle cx="14.5" cy="10" r="1.6" /><circle cx="10" cy="14" r="1.6" /></svg>;
   if (n === "activos") return <svg {...p}><path d="M3 10h14" /><rect x="4" y="4" width="4.5" height="6" rx="1" /><rect x="11.5" y="10" width="4.5" height="6" rx="1" /></svg>;
-  if (n === "proveedores") return <svg {...p}><path d="M10 17s5.5-5.3 5.5-9.2A5.5 5.5 0 1 0 4.5 7.8C4.5 11.7 10 17 10 17Z" /><circle cx="10" cy="7.6" r="1.8" /></svg>;
+  if (n === "puntosVenta") return <svg {...p}><path d="M10 17s5.5-5.3 5.5-9.2A5.5 5.5 0 1 0 4.5 7.8C4.5 11.7 10 17 10 17Z" /><circle cx="10" cy="7.6" r="1.8" /></svg>;
   if (n === "inventario") return <svg {...p}><path d="M2.5 6.2 10 2.5l7.5 3.7-7.5 3.7-7.5-3.7Z" /><path d="M2.5 6.2v7.6L10 17.5l7.5-3.7V6.2M10 9.9v7.6" /></svg>;
   if (n === "mas") return <svg {...p}><circle cx="4" cy="10" r="1.3" /><circle cx="10" cy="10" r="1.3" /><circle cx="16" cy="10" r="1.3" /></svg>;
   return null;
@@ -879,7 +879,7 @@ export default function FresquitoFinanzas() {
             {vista === "paletas" && <Paletas data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "inventario" && <Inventario data={data} guardar={guardar} />}
             {vista === "activos" && <ActivosPasivos data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
-            {vista === "proveedores" && <Proveedores data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
+            {vista === "puntosVenta" && <PuntosVenta data={data} guardar={guardar} pedirBorrar={pedirBorrar} />}
             {vista === "graficas" && <Graficas data={data} />}
             {vista === "ajustes" && <Ajustes data={data} set={set} guardar={guardar} />}
           </main>
@@ -941,7 +941,6 @@ function Panel({ data }) {
   const totalPasivos = data.pasivos.reduce((a, x) => a + (Number(x.monto) || 0), 0);
   const patrimonio = totalActivos + valInsumos + valBases + valPaletas - totalPasivos;
 
-  const proveedoresPorPagar = data.proveedores.filter((p) => p.adeudo > 0).sort((a, b) => b.adeudo - a.adeudo);
   const puntosPorCobrar = data.puntosVenta.filter((p) => p.adeudo > 0).sort((a, b) => b.adeudo - a.adeudo);
 
   const serie = useMemo(() => {
@@ -1040,18 +1039,6 @@ function Panel({ data }) {
           ))}
         </div>
 
-        {proveedoresPorPagar.length > 0 && (
-          <div className="fq-card">
-            <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Proveedores por pagar</div>
-            {proveedoresPorPagar.slice(0, 5).map((p) => (
-              <div className="fq-row" key={p.id}>
-                <span style={{ fontWeight: 600, fontSize: 14 }}>{p.nombre}</span>
-                <span className="fq-num" style={{ color: "var(--chile)", fontSize: 13 }}>{mxn(p.adeudo)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
         {puntosPorCobrar.length > 0 && (
           <div className="fq-card">
             <div style={{ padding: "12px 14px 0" }} className="fq-eyebrow">Puntos de venta por cobrar</div>
@@ -1084,6 +1071,8 @@ function Movimientos({ data, guardar, pedirBorrar }) {
   const [guardadoTick, setGuardadoTick] = useState(0);
   const [lineasPV, setLineasPV] = useState([lineaPVVacia]);
   const [editandoId, setEditandoId] = useState(null);
+  const [especial, setEspecial] = useState(false);
+  const [precioEspecial, setPrecioEspecial] = useState("");
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const receta = data.recetas.find((r) => r.id === f.recetaId);
   const aplicarFiltro = (k) => { setFiltro(k); setFiltroClicks((n) => n + 1); };
@@ -1144,6 +1133,8 @@ function Movimientos({ data, guardar, pedirBorrar }) {
     }
     guardar({ ...data, insumos, recetas, movimientos: [mov, ...data.movimientos] });
     setF({ ...base, tipo: f.tipo, capturadoPor: f.capturadoPor });
+    setEspecial(false);
+    setPrecioEspecial("");
     setGuardadoTick((n) => n + 1);
   };
 
@@ -1306,26 +1297,46 @@ function Movimientos({ data, guardar, pedirBorrar }) {
             <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
               <Campo label="Sabor">
                 <select className="fq-in" value={f.recetaId}
-                  onChange={(e) => setF({ ...f, recetaId: e.target.value, monto: proponerMonto(e.target.value, f.piezas, f.mayoreo) || f.monto })}>
+                  onChange={(e) => setF({ ...f, recetaId: e.target.value,
+                    monto: especial ? Number(f.piezas || 0) * Number(precioEspecial || 0) : (proponerMonto(e.target.value, f.piezas, f.mayoreo) || f.monto) })}>
                   <option value="">— ninguno —</option>
                   {data.recetas.map((r) => <option key={r.id} value={r.id}>{r.sabor} ({num(r.stock || 0, 0)} en stock)</option>)}
                 </select>
               </Campo>
               <Campo label="Piezas vendidas">
                 <input type="number" inputMode="numeric" className="fq-in" placeholder="0" value={f.piezas}
-                  onChange={(e) => setF({ ...f, piezas: e.target.value, monto: proponerMonto(f.recetaId, e.target.value, f.mayoreo) || f.monto })} />
+                  onChange={(e) => setF({ ...f, piezas: e.target.value,
+                    monto: especial ? Number(e.target.value || 0) * Number(precioEspecial || 0) : (proponerMonto(f.recetaId, e.target.value, f.mayoreo) || f.monto) })} />
               </Campo>
             </div>
             <div style={{ display: "flex", gap: 6, marginTop: 9 }}>
               {[false, true].map((mm) => (
                 <button key={String(mm)} className="fq-chip"
-                  style={f.mayoreo === mm ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}
-                  onClick={() => setF({ ...f, mayoreo: mm, monto: proponerMonto(f.recetaId, f.piezas, mm) || f.monto })}>
+                  style={!especial && f.mayoreo === mm ? { background: "var(--tinta)", color: "#fff", borderColor: "var(--tinta)" } : {}}
+                  onClick={() => { setEspecial(false); setF({ ...f, mayoreo: mm, monto: proponerMonto(f.recetaId, f.piezas, mm) || f.monto }); }}>
                   {mm ? "Mayoreo" : "Menudeo"}
                 </button>
               ))}
+              <button className="fq-chip"
+                style={especial ? { background: "var(--ambar)", color: "#fff", borderColor: "var(--ambar)" } : {}}
+                onClick={() => { setEspecial(true); setF({ ...f, monto: Number(f.piezas || 0) * Number(precioEspecial || 0) }); }}>
+                Precio especial
+              </button>
             </div>
-            {receta && Number(f.piezas) > 0 && (
+            {especial ? (
+              <div style={{ marginTop: 9 }}>
+                <Campo label="Precio especial por pieza">
+                  <input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={precioEspecial}
+                    onChange={(e) => { setPrecioEspecial(e.target.value); setF({ ...f, monto: Number(f.piezas || 0) * (Number(e.target.value) || 0) }); }} />
+                </Campo>
+                {Number(f.piezas) > 0 && Number(precioEspecial) > 0 && (
+                  <div className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 8 }}>
+                    {num(f.piezas, 0)} × {mxn(precioEspecial)} = {mxn(f.monto)}
+                    {Number(f.piezas) > (receta?.stock || 0) && <span style={{ color: "var(--chile)" }}> · te faltan paletas en inventario</span>}
+                  </div>
+                )}
+              </div>
+            ) : receta && Number(f.piezas) > 0 && (
               <div className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)", marginTop: 8 }}>
                 A {mxn(f.mayoreo ? receta.precioMayoreo : receta.precioMenudeo)} c/u
                 {Number(f.piezas) > (receta.stock || 0) && <span style={{ color: "var(--chile)" }}> · te faltan paletas en inventario</span>}
@@ -1338,7 +1349,7 @@ function Movimientos({ data, guardar, pedirBorrar }) {
           <div style={{ marginTop: 12, padding: 12, background: "var(--escarcha)", borderRadius: 10 }}>
             <div className="fq-eyebrow" style={{ marginBottom: 8 }}>¿A quién le surtimos?</div>
             {data.puntosVenta.length === 0 ? (
-              <div className="fq-hint">Todavía no tienes puntos de venta. Agrega uno en Proveedores → Puntos de venta.</div>
+              <div className="fq-hint">Todavía no tienes puntos de venta. Agrega uno en Puntos de venta.</div>
             ) : (
               <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 4 }}>
                 {data.puntosVenta.map((p) => (
@@ -2092,7 +2103,7 @@ function FormReceta({ inicial, opciones, data, onGuardar, onCancelar }) {
 
 function Paletas({ data, guardar, pedirBorrar }) {
   const { moldePiezas, ciclosLitros } = data.ajustes;
-  const vacio = { sabor: "", linea: "Agua/Frutal", litros: String(ciclosLitros), piezas: String(moldePiezas), precioMenudeo: "", precioMayoreo: "", items: [], notas: "", stock: 0 };
+  const vacio = { sabor: "", linea: "Agua/Frutal", litros: String(ciclosLitros), piezas: String(moldePiezas), precioMenudeo: "25", precioMayoreo: "20", items: [], notas: "", stock: 0 };
   const [editando, setEditando] = useState(null);
   const [sel, setSel] = useState(null);
   const [busca, setBusca] = useState("");
@@ -2112,21 +2123,53 @@ function Paletas({ data, guardar, pedirBorrar }) {
 
   // Producción con cantidades REALES capturadas. `lineas` trae, por ingrediente,
   // la cantidad física ya usada (en la unidad base del insumo/base) y su costo real.
-  const producirReal = (r, corridas, lineas) => {
+  const producirReal = (r, corridas, lineas, sobrantesCongelados = []) => {
     const consumoIns = {}, consumoBase = {};
     lineas.forEach((l) => {
       const dest = l.tipo === "base" ? consumoBase : consumoIns;
       dest[l.refId] = (dest[l.refId] || 0) + l.cant;
     });
-    const insumos = data.insumos.map((i) => (consumoIns[i.id] != null ? { ...i, stock: Math.max(0, i.stock - consumoIns[i.id]) } : i));
+    let insumos = data.insumos.map((i) => (consumoIns[i.id] != null ? { ...i, stock: Math.max(0, i.stock - consumoIns[i.id]) } : i));
     const bases = data.bases.map((b) => (consumoBase[b.id] != null ? { ...b, stock: Math.max(0, b.stock - consumoBase[b.id]) } : b));
+    // Fruta que sobró de la corrida y se congeló: no se resta nada extra
+    // (lo físico usado ya se descontó arriba), solo se suma al stock del
+    // insumo "congelado" hermano, para no perderla.
+    const congelados = {};
+    sobrantesCongelados.forEach((s) => { congelados[s.insumoId] = (congelados[s.insumoId] || 0) + s.cantidad; });
+    if (Object.keys(congelados).length > 0) {
+      insumos = insumos.map((i) => (congelados[i.id] != null ? { ...i, stock: (i.stock || 0) + congelados[i.id] } : i));
+    }
     const costo = lineas.reduce((a, l) => a + (l.costo || 0), 0);
     const piezas = (r.piezas || 0) * corridas;
-    const prod = { id: uid(), fecha: hoy(), corridas, piezas, costo, costoPieza: piezas > 0 ? costo / piezas : 0 };
+    const prod = { id: uid(), fecha: hoy(), corridas, piezas, costo, costoPieza: piezas > 0 ? costo / piezas : 0,
+      congelado: sobrantesCongelados.length > 0 ? sobrantesCongelados : undefined };
     const recetas = data.recetas.map((x) => (x.id === r.id
       ? { ...x, stock: (x.stock || 0) + piezas, producciones: [prod, ...(x.producciones || [])].slice(0, 60) }
       : x));
     guardar({ ...data, insumos, bases, recetas });
+  };
+
+  // Corrige una corrida ya registrada por error (no vuelve a tocar
+  // insumos/bases/stock — para eso está el corrector de stock de arriba).
+  const editarProduccion = (recetaId, prodId, patch) => {
+    const recetas = data.recetas.map((x) => {
+      if (x.id !== recetaId) return x;
+      const producciones = (x.producciones || []).map((p) => {
+        if (p.id !== prodId) return p;
+        const next = { ...p, ...patch };
+        next.costoPieza = next.piezas > 0 ? next.costo / next.piezas : 0;
+        return next;
+      });
+      return { ...x, producciones };
+    });
+    guardar({ ...data, recetas });
+  };
+
+  const borrarProduccion = (recetaId, prodId) => {
+    const recetas = data.recetas.map((x) => (x.id === recetaId
+      ? { ...x, producciones: (x.producciones || []).filter((p) => p.id !== prodId) }
+      : x));
+    guardar({ ...data, recetas });
   };
 
   // Corrección manual del stock terminado (ej. una corrida se registró de
@@ -2212,7 +2255,8 @@ function Paletas({ data, guardar, pedirBorrar }) {
                 {editando === r.id ? (
                   <FormReceta inicial={r} opciones={opciones} data={data} onGuardar={onGuardar} onCancelar={() => setEditando(null)} />
                 ) : (
-                  <DetalleReceta r={r} data={data} producir={producirReal} borrar={borrar} onEditar={() => setEditando(r.id)} onAjustarStock={ajustarStock} />
+                  <DetalleReceta r={r} data={data} producir={producirReal} borrar={borrar} onEditar={() => setEditando(r.id)} onAjustarStock={ajustarStock}
+                    onEditarProduccion={editarProduccion} onBorrarProduccion={borrarProduccion} />
                 )}
               </div>
             )}
@@ -2224,7 +2268,7 @@ function Paletas({ data, guardar, pedirBorrar }) {
   );
 }
 
-function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) {
+function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock, onEditarProduccion, onBorrarProduccion }) {
   const partes = partesReceta(r, data).sort((a, b) => b.costo - a.costo);
   const costo = partes.reduce((a, p) => a + p.costo, 0);
   const faltantes = partes.filter((p) => p.sinCosto).length;
@@ -2233,7 +2277,9 @@ function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) 
   const porPieza = costo / piezas;
   const prods = r.producciones || [];
   const realPieza = costoRealPieza(r);
+  const realPieza5 = costoRealPieza(r, 5);
   const variacion = porPieza > 0 && realPieza > 0 ? ((realPieza - porPieza) / porPieza) * 100 : 0;
+  const [editandoProdId, setEditandoProdId] = useState(null);
   const fijos = data.ajustes.costosFijosMes || 0;
   const utilMen = r.precioMenudeo - porPieza;
   const utilMay = r.precioMayoreo - porPieza;
@@ -2326,6 +2372,9 @@ function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) 
               <Metrica eyebrow="Costo real / pieza (prom.)" valor={mxn(realPieza)}
                 color={realPieza <= porPieza ? "var(--teal)" : "var(--chile)"}
                 sub={`${prods.length} producciones · estándar ${mxn(porPieza)}`} />
+              <Metrica eyebrow="Promedio últimas 5 corridas" valor={mxn(realPieza5)}
+                color={realPieza5 <= porPieza ? "var(--teal)" : "var(--chile)"}
+                sub={`${Math.min(5, prods.length)} corridas más recientes`} />
               <Metrica eyebrow="Variación vs estándar" valor={`${variacion > 0 ? "+" : ""}${num(variacion, 0)}%`}
                 color={variacion <= 0 ? "var(--teal)" : "var(--chile)"}
                 sub={variacion > 0 ? "Cuesta más de lo planeado" : "Dentro del estándar"} />
@@ -2358,12 +2407,22 @@ function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) 
             <div style={{ marginTop: 12 }}>
               <div className="fq-eyebrow" style={{ marginBottom: 6 }}>Últimas producciones</div>
               {prods.slice(0, 6).map((p) => (
-                <div className="fq-row" key={p.id} style={{ padding: "6px 0" }}>
-                  <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
-                    {p.fecha} · {num(p.corridas, 0)} corr · {num(p.piezas, 0)} pzas
-                  </span>
-                  <span className="fq-num" style={{ fontSize: 12 }}>{mxn(p.costo)} · {mxn(p.costoPieza)}/pza</span>
-                </div>
+                editandoProdId === p.id ? (
+                  <FilaProduccionEditar key={p.id} p={p}
+                    onGuardar={(patch) => { onEditarProduccion(r.id, p.id, patch); setEditandoProdId(null); }}
+                    onCancelar={() => setEditandoProdId(null)} />
+                ) : (
+                  <div className="fq-row" key={p.id} style={{ padding: "6px 0" }}>
+                    <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>
+                      {p.fecha} · {num(p.corridas, 0)} corr · {num(p.piezas, 0)} pzas
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="fq-num" style={{ fontSize: 12 }}>{mxn(p.costo)} · {mxn(p.costoPieza)}/pza</span>
+                      <button className="fq-btn ghost" style={{ padding: "2px 8px", fontSize: 11 }} onClick={() => setEditandoProdId(p.id)}>Editar</button>
+                      <BotonBorrar chico etiqueta="Borrar" onBorrar={() => onBorrarProduccion(r.id, p.id)} />
+                    </span>
+                  </div>
+                )
               ))}
             </div>
           )}
@@ -2378,12 +2437,31 @@ function DetalleReceta({ r, data, producir, borrar, onEditar, onAjustarStock }) 
   );
 }
 
+// Fila de "Últimas producciones" convertida en edición: corrige corridas,
+// piezas o costo de una corrida ya registrada por error (no vuelve a tocar
+// insumos/bases/stock).
+function FilaProduccionEditar({ p, onGuardar, onCancelar }) {
+  const [f, setF] = useState({ corridas: String(p.corridas ?? ""), piezas: String(p.piezas ?? ""), costo: String(p.costo ?? "") });
+  const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (
+    <div style={{ padding: "8px 0", display: "flex", gap: 6, alignItems: "flex-end", flexWrap: "wrap" }}>
+      <div style={{ flex: "1 1 70px" }}><Campo label="Corridas"><input type="number" inputMode="decimal" className="fq-in" value={f.corridas} onChange={c("corridas")} /></Campo></div>
+      <div style={{ flex: "1 1 70px" }}><Campo label="Piezas"><input type="number" inputMode="decimal" className="fq-in" value={f.piezas} onChange={c("piezas")} /></Campo></div>
+      <div style={{ flex: "1 1 90px" }}><Campo label="Costo total"><input type="number" inputMode="decimal" className="fq-in" value={f.costo} onChange={c("costo")} /></Campo></div>
+      <button className="fq-btn" style={{ padding: "9px 12px" }}
+        onClick={() => onGuardar({ corridas: Number(f.corridas) || 0, piezas: Number(f.piezas) || 0, costo: Number(f.costo) || 0 })}>Guardar</button>
+      <button className="fq-btn ghost" style={{ padding: "9px 12px" }} onClick={onCancelar}>Cancelar</button>
+    </div>
+  );
+}
+
 /* Panel de producción: captura lo REAL usado por ingrediente (kg/g, pzs o
    paquete) para descontar bien del inventario y sacar el costo real. */
 function ProducirReceta({ r, data, producir, porPieza }) {
   const [corridas, setCorridas] = useState("1");
   const corridasNum = Number(corridas) || 1;
   const [reales, setReales] = useState({});
+  const [sobrantes, setSobrantes] = useState({}); // idx -> { sobro, congelado, cantCongelada }
   const [logroActivo, setLogroActivo] = useState(false);
 
   const refDe = (it) => (it.tipo === "base"
@@ -2422,6 +2500,7 @@ function ProducirReceta({ r, data, producir, porPieza }) {
     setReales((p) => ({ ...p, [idx]: { unit: unidad, val: teo ? String(redondea(teo)) : "" } }));
   };
   const setVal = (idx, val) => setReales((p) => ({ ...p, [idx]: { ...(p[idx] || {}), val } }));
+  const setSobrante = (idx, patch) => setSobrantes((p) => ({ ...p, [idx]: { sobro: "", congelado: false, cantCongelada: "", ...p[idx], ...patch } }));
 
   const lineas = r.items.map((it, idx) => {
     const ref = refDe(it);
@@ -2438,7 +2517,10 @@ function ProducirReceta({ r, data, producir, porPieza }) {
 
   const confirmar = () => {
     const payload = lineas.filter((l) => l.ref).map((l) => ({ tipo: l.it.tipo, refId: l.it.refId, cant: l.fisico, costo: l.costo }));
-    producir(r, corridasNum, payload);
+    const sobrantesPayload = lineas
+      .filter((l) => l.ref && sobrantes[l.idx]?.congelado && Number(sobrantes[l.idx]?.cantCongelada) > 0)
+      .map((l) => ({ insumoId: l.ref.congeladoId, cantidad: Number(sobrantes[l.idx].cantCongelada) }));
+    producir(r, corridasNum, payload, sobrantesPayload);
     // Momento de logro: la corrida salió igual o mejor que el estándar.
     if (porPieza > 0 && piezas > 0 && costoTotal / piezas <= porPieza) {
       setLogroActivo(true);
@@ -2480,6 +2562,27 @@ function ProducirReceta({ r, data, producir, porPieza }) {
                 {l.it.tipo === "insumo" && Number(l.ref.merma) > 0 ? ` (receta + merma ${num(l.ref.merma, 0)}%)` : ""}
                 {" · "}{mxn(l.costo)}
               </div>
+              {l.it.tipo === "insumo" && l.ref.tipo === "Fruta" && l.ref.congeladoId && data.insumos.some((i) => i.id === l.ref.congeladoId) && (
+                <div style={{ marginTop: 5, paddingLeft: 10, borderLeft: "2px solid var(--linea)" }}>
+                  <Campo label={`¿Sobró fruta? (${l.ref.unidad})`}>
+                    <input type="number" inputMode="decimal" className="fq-in" placeholder="0"
+                      value={sobrantes[l.idx]?.sobro ?? ""} onChange={(e) => setSobrante(l.idx, { sobro: e.target.value })} />
+                  </Campo>
+                  {Number(sobrantes[l.idx]?.sobro) > 0 && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                      <label style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 12, color: "var(--tinta-70)" }}>
+                        <input type="checkbox" checked={!!sobrantes[l.idx]?.congelado}
+                          onChange={(e) => setSobrante(l.idx, { congelado: e.target.checked, cantCongelada: e.target.checked ? sobrantes[l.idx]?.sobro : "" })} />
+                        Se congeló
+                      </label>
+                      {sobrantes[l.idx]?.congelado && (
+                        <input type="number" inputMode="decimal" className="fq-in" style={{ flex: 1 }} placeholder="cuánto"
+                          value={sobrantes[l.idx]?.cantCongelada ?? ""} onChange={(e) => setSobrante(l.idx, { cantCongelada: e.target.value })} />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
@@ -2638,25 +2741,23 @@ function ActivosPasivos({ data, guardar, pedirBorrar }) {
   );
 }
 
-/* ── Proveedores y puntos de venta ────────────────────────────
-   Módulo de relación y adeudo — comprar insumos sigue siendo solo
-   Movimientos, y surtir a un punto de venta sigue siendo solo
-   Movimientos → Registrar ingreso. El crédito que solo se acumula
-   (compra/entrega) no genera movimiento; los pagos y cobros reales
-   sí, porque ahí sí se movió dinero. Los puntos de venta además
-   tienen su propio inventario (lo que se les surtió), que se vacía
-   aquí cuando se registra que ya se vendió. */
-function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVenta, onBorrar }) {
+/* ── Puntos de venta ───────────────────────────────────────────
+   A quién le dejamos paletas a consignación. Comprar insumos sigue
+   siendo solo Movimientos, y surtir a un punto de venta sigue siendo
+   solo Movimientos → Registrar ingreso. El crédito que solo se
+   acumula (entrega) no genera movimiento; los cobros reales sí,
+   porque ahí sí se movió dinero. Cada punto además tiene su propio
+   inventario (lo que se le surtió), que se vacía aquí cuando se
+   registra que ya se vendió. */
+function DetallePuntoVenta({ item, recetas, movimientos, onEditar, onEvento, onVenta, onBorrar }) {
   const [monto, setMonto] = useState("");
   const [notas, setNotas] = useState("");
   const [ventaPiezas, setVentaPiezas] = useState({});
   const eventos = item.eventos || [];
 
-  const inventarioLineas = !esProveedor
-    ? Object.entries(item.inventario || {})
-        .map(([recetaId, cant]) => ({ recetaId, disponible: Number(cant) || 0, receta: (recetas || []).find((r) => r.id === recetaId) }))
-        .filter((l) => l.disponible > 0 && l.receta)
-    : [];
+  const inventarioLineas = Object.entries(item.inventario || {})
+    .map(([recetaId, cant]) => ({ recetaId, disponible: Number(cant) || 0, receta: (recetas || []).find((r) => r.id === recetaId) }))
+    .filter((l) => l.disponible > 0 && l.receta);
 
   const vender = (cobrar) => {
     const lineas = inventarioLineas
@@ -2667,11 +2768,6 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
     setVentaPiezas({});
   };
 
-  const etiquetaAcumula = esProveedor ? "Compra a crédito" : "Entrega a crédito";
-  const etiquetaAbono = esProveedor ? "Registrar pago" : "Registrar cobro";
-  const tipoAcumula = esProveedor ? "compra" : "entrega";
-  const tipoAbono = esProveedor ? "pago" : "cobro";
-
   const disparar = (tipoEvento) => {
     const m = Number(monto) || 0;
     if (m <= 0) return;
@@ -2679,8 +2775,8 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
     setMonto(""); setNotas("");
   };
 
-  const etiquetaEvento = (t) => ({ compra: "Compra a crédito", pago: "Pago", entrega: "Entrega a crédito", cobro: "Cobro" }[t] || t);
-  const esAbonoTipo = (t) => t === "pago" || t === "cobro";
+  const etiquetaEvento = (t) => ({ entrega: "Entrega a crédito", cobro: "Cobro" }[t] || t);
+  const esAbonoTipo = (t) => t === "cobro";
 
   // Saldo de adeudo después de cada evento, del más viejo al más nuevo,
   // para la mini-gráfica (mismo patrón que el historial de precios).
@@ -2691,30 +2787,60 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
   }, []);
   const path = saldos.length >= 3 ? sparklinePath(saldos, 260, 60) : "";
 
+  // Lo que más se ha vendido aquí: se reutilizan los ingresos ya
+  // registrados (venta directa o surtido cobrado) para este punto.
+  const masVendido = useMemo(() => {
+    const porReceta = {};
+    (movimientos || []).forEach((m) => {
+      if (m.tipo !== "ingreso" || m.puntoVentaId !== item.id || !m.recetaId) return;
+      const acc = porReceta[m.recetaId] || { piezas: 0, monto: 0 };
+      acc.piezas += m.piezas || 0;
+      acc.monto += m.monto || 0;
+      porReceta[m.recetaId] = acc;
+    });
+    return Object.entries(porReceta)
+      .map(([recetaId, v]) => ({ recetaId, ...v, sabor: (recetas || []).find((r) => r.id === recetaId)?.sabor || "?" }))
+      .sort((a, b) => b.piezas - a.piezas);
+  }, [movimientos, recetas, item.id]);
+
   return (
     <div style={{ padding: "0 13px 14px", background: "var(--escarcha)" }}>
       <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", paddingTop: 12 }}>
         <Campo label="Nombre"><input className="fq-in" value={item.nombre} onChange={(e) => onEditar({ nombre: e.target.value })} /></Campo>
         <Campo label="Ubicación"><input className="fq-in" value={item.ubicacion || ""} placeholder="Colonia, ciudad…" onChange={(e) => onEditar({ ubicacion: e.target.value })} /></Campo>
       </div>
+      <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+        <Campo label="Nombre de contacto"><input className="fq-in" placeholder="Con quién se trata directo" value={item.contacto || ""} onChange={(e) => onEditar({ contacto: e.target.value })} /></Campo>
+        <Campo label="Teléfono"><input className="fq-in" placeholder="10 dígitos" value={item.telefono || ""} onChange={(e) => onEditar({ telefono: e.target.value })} /></Campo>
+      </div>
       <div style={{ marginTop: 10 }}>
-        <Campo label={esProveedor ? "Qué nos surte" : "Qué le surtimos"}>
+        <Campo label="Link de ubicación (opcional)" hint={item.ubicacionLink ? undefined : "Pega aquí un link de Google Maps u otro mapa."}>
+          <input className="fq-in" placeholder="https://maps.google.com/…" value={item.ubicacionLink || ""} onChange={(e) => onEditar({ ubicacionLink: e.target.value })} />
+        </Campo>
+        {item.ubicacionLink && (
+          <a href={item.ubicacionLink} target="_blank" rel="noopener noreferrer" className="fq-num"
+            style={{ fontSize: 12, color: "var(--teal)", display: "inline-block", marginTop: 4 }}>Ver mapa →</a>
+        )}
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Campo label="Qué le surtimos">
           <input className="fq-in" value={item.notas || ""} onChange={(e) => onEditar({ notas: e.target.value })} />
         </Campo>
       </div>
+      <div style={{ fontSize: 11, color: "var(--tinta-40)", marginTop: 8 }}>Alta: {item.fechaAlta || "—"}</div>
 
       <div style={{ marginTop: 12, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
         <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Registrar movimiento</div>
         <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
           <Campo label="Monto"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={monto} onChange={(e) => setMonto(e.target.value)} /></Campo>
-          <Campo label="Nota (opcional)"><input className="fq-in" placeholder={esProveedor ? "Qué se compró" : "Qué se entregó"} value={notas} onChange={(e) => setNotas(e.target.value)} /></Campo>
+          <Campo label="Nota (opcional)"><input className="fq-in" placeholder="Qué se entregó" value={notas} onChange={(e) => setNotas(e.target.value)} /></Campo>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-          <button className="fq-btn ghost" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar(tipoAcumula)}>{etiquetaAcumula}</button>
-          <button className="fq-btn" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar(tipoAbono)}>{etiquetaAbono}</button>
+          <button className="fq-btn ghost" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar("entrega")}>Entrega a crédito</button>
+          <button className="fq-btn" style={{ flex: 1 }} disabled={!(Number(monto) > 0)} onClick={() => disparar("cobro")}>Registrar cobro</button>
         </div>
         <div className="fq-hint" style={{ marginTop: 8 }}>
-          "{etiquetaAcumula}" solo suma al adeudo. "{etiquetaAbono}" lo resta y sí queda registrado en Movimientos.
+          "Entrega a crédito" solo suma al adeudo. "Registrar cobro" lo resta y sí queda registrado en Movimientos.
         </div>
       </div>
 
@@ -2740,6 +2866,18 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
         </div>
       )}
 
+      {masVendido.length > 0 && (
+        <div style={{ marginTop: 12, padding: 12, background: "var(--papel)", border: "1px solid var(--linea)", borderRadius: 10 }}>
+          <div className="fq-eyebrow" style={{ marginBottom: 8 }}>Lo que más se ha vendido aquí</div>
+          {masVendido.slice(0, 8).map((v) => (
+            <div className="fq-row" key={v.recetaId} style={{ padding: "6px 0" }}>
+              <span style={{ fontSize: 13 }}>{v.sabor}</span>
+              <span className="fq-num" style={{ fontSize: 12, color: "var(--tinta-70)" }}>{num(v.piezas, 0)} pzas · {mxn(v.monto)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {eventos.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <div className="fq-eyebrow" style={{ marginBottom: 5 }}>Cómo se ha movido el adeudo</div>
@@ -2762,7 +2900,7 @@ function DetalleProveedor({ item, esProveedor, recetas, onEditar, onEvento, onVe
         </div>
       )}
 
-      <BotonBorrar etiqueta={esProveedor ? "Borrar proveedor" : "Borrar punto de venta"} onBorrar={onBorrar} style={{ width: "100%", marginTop: 12 }} />
+      <BotonBorrar etiqueta="Borrar punto de venta" onBorrar={onBorrar} style={{ width: "100%", marginTop: 12 }} />
     </div>
   );
 }
@@ -2891,37 +3029,36 @@ function Inventario({ data, guardar }) {
   );
 }
 
-function Proveedores({ data, guardar, pedirBorrar }) {
-  const [vista, setVista] = useState("proveedores"); // proveedores | puntosVenta
+function PuntosVenta({ data, guardar, pedirBorrar }) {
   const [abierto, setAbierto] = useState(false);
   const [sel, setSel] = useState(null);
-  const esProveedor = vista === "proveedores";
-  const lista = data[vista];
+  const lista = data.puntosVenta;
 
-  const vacio = { nombre: "", ubicacion: "", adeudo: "", notas: "" };
+  const vacio = { nombre: "", ubicacion: "", contacto: "", telefono: "", ubicacionLink: "", adeudo: "", notas: "" };
   const [f, setF] = useState(vacio);
   const c = (k) => (e) => setF({ ...f, [k]: e.target.value });
 
   const agregar = () => {
     if (!f.nombre.trim()) return;
-    const nuevo = { id: uid(), nombre: f.nombre.trim(), ubicacion: f.ubicacion.trim(), notas: f.notas.trim(),
-      adeudo: Number(f.adeudo) || 0, eventos: [] };
-    guardar({ ...data, [vista]: [...lista, nuevo] });
+    const nuevo = { id: uid(), nombre: f.nombre.trim(), ubicacion: f.ubicacion.trim(),
+      contacto: f.contacto.trim(), telefono: f.telefono.trim(), ubicacionLink: f.ubicacionLink.trim(),
+      notas: f.notas.trim(), adeudo: Number(f.adeudo) || 0, eventos: [], inventario: {}, fechaAlta: hoy() };
+    guardar({ ...data, puntosVenta: [...lista, nuevo] });
     setF(vacio); setAbierto(false);
   };
 
-  const editar = (id, patch) => guardar({ ...data, [vista]: lista.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
+  const editar = (id, patch) => guardar({ ...data, puntosVenta: lista.map((x) => (x.id === id ? { ...x, ...patch } : x)) });
   const borrar = (id) => {
     setSel(null);
-    pedirBorrar({ ...data, [vista]: lista.filter((x) => x.id !== id) }, esProveedor ? "Proveedor eliminado" : "Punto de venta eliminado");
+    pedirBorrar({ ...data, puntosVenta: lista.filter((x) => x.id !== id) }, "Punto de venta eliminado");
   };
 
-  // Los abonos (pago/cobro) sí generan un movimiento real de caja; el
-  // crédito que solo se acumula (compra/entrega) solo mueve el adeudo.
+  // Los cobros sí generan un movimiento real de caja; el crédito que solo
+  // se acumula (entrega) solo mueve el adeudo.
   const registrarEvento = (id, { tipoEvento, monto, notas }) => {
     const item = lista.find((x) => x.id === id);
     if (!item || !(monto > 0)) return;
-    const esAbono = tipoEvento === "pago" || tipoEvento === "cobro";
+    const esAbono = tipoEvento === "cobro";
     const evento = { id: uid(), fecha: hoy(), tipo: tipoEvento, monto, notas };
     const nuevoAdeudo = esAbono ? Math.max(0, (item.adeudo || 0) - monto) : (item.adeudo || 0) + monto;
     const nuevaLista = lista.map((x) => (x.id === id
@@ -2930,15 +3067,13 @@ function Proveedores({ data, guardar, pedirBorrar }) {
 
     let movimientos = data.movimientos;
     if (esAbono) {
-      const base = { id: uid(), fecha: hoy(), monto, lugar: item.nombre,
+      const mov = { id: uid(), fecha: hoy(), monto, lugar: item.nombre,
         insumoId: "", cantidad: 0, mayoreo: false, recurrente: false, recetaId: "", piezas: 0,
-        capturadoPor: data.ajustes.usuario || "" };
-      const mov = esProveedor
-        ? { ...base, tipo: "gasto", categoria: "Proveedores", canal: "", notas: notas || `Pago a ${item.nombre}` }
-        : { ...base, tipo: "ingreso", categoria: "", canal: "Puntos de venta", notas: notas || `Cobro a ${item.nombre}` };
+        capturadoPor: data.ajustes.usuario || "",
+        tipo: "ingreso", categoria: "", canal: "Puntos de venta", notas: notas || `Cobro a ${item.nombre}` };
       movimientos = [mov, ...data.movimientos];
     }
-    guardar({ ...data, [vista]: nuevaLista, movimientos });
+    guardar({ ...data, puntosVenta: nuevaLista, movimientos });
   };
 
   // Vender lo que ya está en el inventario de un punto de venta: resta esas
@@ -2983,37 +3118,37 @@ function Proveedores({ data, guardar, pedirBorrar }) {
         }
       : x));
 
-    guardar({ ...data, [vista]: nuevaLista, movimientos: cobrar ? [...nuevosMovs, ...data.movimientos] : data.movimientos });
+    guardar({ ...data, puntosVenta: nuevaLista, movimientos: cobrar ? [...nuevosMovs, ...data.movimientos] : data.movimientos });
   };
 
   const totalAdeudo = lista.reduce((a, x) => a + (Number(x.adeudo) || 0), 0);
 
   return (
     <div className="fq-grid">
-      <div style={{ display: "flex", gap: 6 }}>
-        {[["proveedores", "Proveedores"], ["puntosVenta", "Puntos de venta"]].map(([k, l]) => (
-          <button key={k} className={"fq-btn" + (vista === k ? "" : " ghost")} style={{ flex: 1 }}
-            onClick={() => { setVista(k); setSel(null); setAbierto(false); }}>{l}</button>
-        ))}
-      </div>
-
       <div className="fq-metrica-grid">
-        <Metrica eyebrow={esProveedor ? "Proveedores" : "Puntos de venta"} valor={lista.length} />
-        <Metrica eyebrow={esProveedor ? "Les debemos" : "Nos deben"} valor={mxn(totalAdeudo)} color={totalAdeudo > 0 ? "var(--chile)" : "var(--teal)"} />
+        <Metrica eyebrow="Puntos de venta" valor={lista.length} />
+        <Metrica eyebrow="Nos deben" valor={mxn(totalAdeudo)} color={totalAdeudo > 0 ? "var(--chile)" : "var(--teal)"} />
       </div>
 
       <button className="fq-btn" onClick={() => setAbierto(!abierto)}>
-        {abierto ? "Cancelar" : esProveedor ? "Agregar proveedor" : "Agregar punto de venta"}
+        {abierto ? "Cancelar" : "Agregar punto de venta"}
       </button>
 
       {abierto && (
         <div className="fq-card" style={{ padding: 14 }}>
           <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
-            <Campo label="Nombre"><input className="fq-in" placeholder={esProveedor ? "Ej. Central de abasto" : "Ej. Minisúper La Esquina"} value={f.nombre} onChange={c("nombre")} /></Campo>
+            <Campo label="Nombre"><input className="fq-in" placeholder="Ej. Minisúper La Esquina" value={f.nombre} onChange={c("nombre")} /></Campo>
             <Campo label="Ubicación"><input className="fq-in" placeholder="Colonia, ciudad…" value={f.ubicacion} onChange={c("ubicacion")} /></Campo>
           </div>
           <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
-            <Campo label={esProveedor ? "Qué nos surte" : "Qué le surtimos"}><input className="fq-in" placeholder="Ej. fruta y empaque" value={f.notas} onChange={c("notas")} /></Campo>
+            <Campo label="Nombre de contacto"><input className="fq-in" placeholder="Con quién se trata directo" value={f.contacto} onChange={c("contacto")} /></Campo>
+            <Campo label="Teléfono"><input className="fq-in" placeholder="10 dígitos" value={f.telefono} onChange={c("telefono")} /></Campo>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Campo label="Link de ubicación (opcional)"><input className="fq-in" placeholder="https://maps.google.com/…" value={f.ubicacionLink} onChange={c("ubicacionLink")} /></Campo>
+          </div>
+          <div className="fq-grid" style={{ gridTemplateColumns: "1fr 1fr", marginTop: 10 }}>
+            <Campo label="Qué le surtimos"><input className="fq-in" placeholder="Ej. paletas de agua" value={f.notas} onChange={c("notas")} /></Campo>
             <Campo label="Adeudo inicial (opcional)"><input type="number" inputMode="decimal" className="fq-in" placeholder="0.00" value={f.adeudo} onChange={c("adeudo")} /></Campo>
           </div>
           <button className="fq-btn" style={{ width: "100%", marginTop: 12 }} onClick={agregar}>Guardar</button>
@@ -3022,14 +3157,14 @@ function Proveedores({ data, guardar, pedirBorrar }) {
 
       <div className="fq-card">
         {lista.length === 0 ? (
-          <div className="fq-empty">{esProveedor ? "Sin proveedores registrados." : "Sin puntos de venta registrados."}</div>
+          <div className="fq-empty">Sin puntos de venta registrados.</div>
         ) : lista.map((x) => (
           <div key={x.id}>
             <div className="fq-row" style={{ cursor: "pointer" }} onClick={() => setSel(sel === x.id ? null : x.id)}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14 }}>{x.nombre}</div>
                 <div className="fq-num" style={{ fontSize: 11, color: "var(--tinta-40)" }}>
-                  {x.ubicacion || "Sin ubicación"}{x.notas ? ` · ${x.notas}` : ""}
+                  {x.ubicacion || "Sin ubicación"}{x.contacto ? ` · ${x.contacto}` : ""}
                 </div>
               </div>
               <span className="fq-num" style={{ fontWeight: 600, fontSize: 14, color: x.adeudo > 0 ? "var(--chile)" : "var(--teal)" }}>
@@ -3037,7 +3172,7 @@ function Proveedores({ data, guardar, pedirBorrar }) {
               </span>
             </div>
             {sel === x.id && (
-              <DetalleProveedor item={x} esProveedor={esProveedor} recetas={data.recetas} onEditar={(patch) => editar(x.id, patch)}
+              <DetallePuntoVenta item={x} recetas={data.recetas} movimientos={data.movimientos} onEditar={(patch) => editar(x.id, patch)}
                 onEvento={(ev) => registrarEvento(x.id, ev)} onVenta={(v) => registrarVenta(x.id, v)} onBorrar={() => borrar(x.id)} />
             )}
           </div>
