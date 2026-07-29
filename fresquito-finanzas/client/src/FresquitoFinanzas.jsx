@@ -2103,7 +2103,14 @@ function FormReceta({ inicial, opciones, data, onGuardar, onCancelar }) {
 
 function Paletas({ data, guardar, pedirBorrar }) {
   const { moldePiezas, ciclosLitros } = data.ajustes;
-  const vacio = { sabor: "", linea: "Agua/Frutal", litros: String(ciclosLitros), piezas: String(moldePiezas), precioMenudeo: "25", precioMayoreo: "20", items: [], notas: "", stock: 0 };
+  // Toda paleta gasta una bolsa celofán y un palito por pieza: se
+  // precargan solas para no tener que agregarlas a mano en cada sabor nuevo.
+  const empaquePorDefecto = () => {
+    const bolsa = data.insumos.find((i) => i.nombre.toLowerCase().includes("celofan") || i.nombre.toLowerCase().includes("celofán"));
+    const palitos = data.insumos.find((i) => i.nombre.toLowerCase().includes("palito"));
+    return [bolsa, palitos].filter(Boolean).map((i) => ({ tipo: "insumo", refId: i.id, cantidad: moldePiezas || 40 }));
+  };
+  const vacio = { sabor: "", linea: "Agua/Frutal", litros: String(ciclosLitros), piezas: String(moldePiezas), precioMenudeo: "25", precioMayoreo: "20", items: empaquePorDefecto(), notas: "", stock: 0 };
   const [editando, setEditando] = useState(null);
   const [sel, setSel] = useState(null);
   const [busca, setBusca] = useState("");
