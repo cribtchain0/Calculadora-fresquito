@@ -1,2 +1,7 @@
 # Configuración local de Claude Code (permisos por máquina)
 .claude/settings.local.json
+
+# Artefactos de la herramienta ecc-universal (skills genéricos, no del proyecto)
+.agents/
+.claude/skills/
+skills-lock.json
